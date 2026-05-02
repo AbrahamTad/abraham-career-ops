@@ -1,6 +1,6 @@
 {
   "name": "career-ops",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "description": "AI-powered job search pipeline built on Claude Code",
   "scripts": {
     "doctor": "node doctor.mjs",
@@ -15,9 +15,7 @@
     "rollback": "node update-system.mjs rollback",
     "liveness": "node check-liveness.mjs",
     "scan": "node scan.mjs",
-    "gemini:eval": "node gemini-eval.mjs",
-    "test": "node --test test/*.test.mjs",
-    "test:pipeline": "node --test test/pipeline.integration.test.mjs"
+    "gemini:eval": "node gemini-eval.mjs"
   },
   "keywords": [
     "ai",

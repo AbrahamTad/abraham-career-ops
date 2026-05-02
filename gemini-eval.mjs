@@ -17,11 +17,9 @@
  * Free-tier model: gemini-2.0-flash (generous quota, no billing required)
  */
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { slugify } from './src/utils/strings.mjs';
-import { scoreJobAgainstProfile } from './src/services/pipeline/job-intelligence.mjs';
 
 // ---------------------------------------------------------------------------
 // Bootstrap: load .env before anything else
@@ -49,7 +47,6 @@ const PATHS = {
   cv:       join(ROOT, 'cv.md'),
   reports:  join(ROOT, 'reports'),
   tracker:  join(ROOT, 'data', 'applications.md'),
-  trackerAdditions: join(ROOT, 'batch', 'tracker-additions'),
 };
 
 // ---------------------------------------------------------------------------
@@ -151,6 +148,16 @@ function nextReportNumber() {
   return String(Math.max(...files) + 1).padStart(3, '0');
 }
 
+// Lazy import — only used when saving
+let readdirSync;
+try {
+  ({ readdirSync } = await import('fs'));
+} catch { /* already imported above via named exports */ }
+// Use named import fallback
+if (!readdirSync) {
+  readdirSync = (await import('fs')).readdirSync;
+}
+
 // ---------------------------------------------------------------------------
 // Load context files
 // ---------------------------------------------------------------------------
@@ -159,7 +166,6 @@ console.log('\n📂  Loading context files...');
 const sharedContext  = readFile(PATHS.shared,   'modes/_shared.md');
 const ofertaLogic    = readFile(PATHS.oferta,   'modes/oferta.md');
 const cvContent      = readFile(PATHS.cv,       'cv.md');
-const localSignals   = scoreJobAgainstProfile(jdText);
 
 // ---------------------------------------------------------------------------
 // Build the system prompt (mirrors the Claude skill router logic)
@@ -219,10 +225,10 @@ const model = genAI.getGenerativeModel({
 
 let evaluationText;
 try {
-  const result = await retryWithBackoff(() => model.generateContent([
+  const result = await model.generateContent([
     { text: systemPrompt },
-    { text: `\n\nJOB DESCRIPTION TO EVALUATE:\n\n${jdText}\n\nLOCAL MATCH SIGNALS:\n${localSignals.why}` },
-  ]));
+    { text: `\n\nJOB DESCRIPTION TO EVALUATE:\n\n${jdText}` },
+  ]);
   evaluationText = result.response.text();
 } catch (err) {
   console.error('❌  Gemini API error:', err.message);
@@ -232,21 +238,6 @@ try {
     console.error('    You may have hit the free-tier rate limit. Wait 60s and retry.');
   }
   process.exit(1);
-}
-
-async function retryWithBackoff(fn, retries = 2) {
-  let lastError;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      const retryable = /quota|rate|429|503|temporar/i.test(err.message || '');
-      if (!retryable || attempt === retries) break;
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-    }
-  }
-  throw lastError;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,11 +282,10 @@ if (saveReport) {
     if (!existsSync(PATHS.reports)) {
       mkdirSync(PATHS.reports, { recursive: true });
     }
-    mkdirSync(PATHS.trackerAdditions, { recursive: true });
 
     const num         = nextReportNumber();
     const today       = new Date().toISOString().split('T')[0];
-    const companySlug = slugify(company);
+    const companySlug = company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     const filename    = `${num}-${companySlug}-${today}.md`;
     const reportPath  = join(PATHS.reports, filename);
 
@@ -304,7 +294,6 @@ if (saveReport) {
 **Date:** ${today}
 **Archetype:** ${archetype}
 **Score:** ${score}/5
-**URL:** local Gemini CLI input
 **Legitimacy:** ${legitimacy}
 **PDF:** pending
 **Tool:** Gemini (${modelName})
@@ -317,12 +306,9 @@ ${evaluationText.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '').tri
     writeFileSync(reportPath, reportContent, 'utf-8');
     console.log(`\n✅  Report saved: reports/${filename}`);
 
-    const trackerFilename = `${num}-${companySlug}.tsv`;
-    const trackerPath = join(PATHS.trackerAdditions, trackerFilename);
-    const trackerLine = `${Number.parseInt(num, 10)}\t${today}\t${company}\t${role}\tEvaluated\t${score}/5\tNO\t[${Number.parseInt(num, 10)}](reports/${filename})\tGemini evaluation. ${localSignals.why}\n`;
-    writeFileSync(trackerPath, trackerLine, 'utf-8');
-    console.log(`\n📊  Tracker TSV saved: batch/tracker-additions/${trackerFilename}`);
-    console.log('    Run: node merge-tracker.mjs');
+    // Append tracker entry reminder
+    console.log(`\n📊  Tracker entry (add to data/applications.md):`);
+    console.log(`    | ${num} | ${today} | ${company} | ${role} | ${score} | Evaluada | ❌ | [${num}](reports/${filename}) |`);
   } catch (err) {
     console.warn(`⚠️   Could not save report: ${err.message}`);
   }
