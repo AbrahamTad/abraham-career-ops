@@ -1,0 +1,373 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum AppStatus {
+  SAVED
+  APPLIED
+  RESPONDED
+  INTERVIEW
+  OFFER
+  REJECTED
+  DISCARDED
+}
+
+enum SearchType {
+  JOB_SCAN
+  COMPANY_DISCOVERY
+  LIA_SEARCH
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ─── Core Models ─────────────────────────────────────────────────────────────
+
+model User {
+  id         String   @id @default(cuid())
+  supabaseId String   @unique
+  email      String   @unique
+  name       String?
+  avatarUrl  String?
+  role       Role     @default(USER)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  profile      UserProfile?
+  cvs          CV[]
+  applications Application[]
+  generatedCVs GeneratedCV[]
+  coverLetters CoverLetter[]
+  searchTasks  SearchTask[]
+  subscription Subscription?
+  auditLogs    AuditLog[]
+  jobMatches   JobMatch[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model CV {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName   String?
+  fileUrl    String?
+  fileSize   Int?
+  mimeType   String?
+  rawText    String   @db.Text
+  parsedData Json?
+  isActive   Boolean  @default(true)
+  language   String   @default("en")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  jobMatches JobMatch[]
+
+  @@index([userId])
+  @@map("cvs")
+}
+
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName   String?
+  phone      String?
+  location   String?
+  city       String?
+  country    String   @default("SE")
+  timezone   String   @default("Europe/Stockholm")
+  linkedinUrl  String?
+  githubUrl    String?
+  portfolioUrl String?
+
+  targetRoles    String[]
+  targetSalaryMin Int?
+  targetSalaryMax Int?
+  salaryCurrency  String   @default("SEK")
+
+  skills         String[]
+  toolsAndTech   String[]
+  languages      String[]
+  spokenLanguages String[]
+
+  jobTypes       String[]
+  workPreference String[]
+  availableFrom  DateTime?
+  educationLevel String?
+
+  liaEnabled Boolean @default(false)
+  liaDate1Start DateTime?
+  liaDate1End   DateTime?
+  liaDate2Start DateTime?
+  liaDate2End   DateTime?
+
+  bio          String? @db.Text
+  goals        String? @db.Text
+  dealBreakers String? @db.Text
+  superpower   String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("user_profiles")
+}
+
+model Company {
+  id          String @id @default(cuid())
+  name        String
+  slug        String @unique
+  domain      String?
+  logoUrl     String?
+  description String? @db.Text
+  industry    String?
+  companySize String?
+  location    String?
+  city        String?
+  country     String?
+  careerPageUrl String?
+  linkedinUrl   String?
+  glassdoorUrl  String?
+  contactEmail  String?
+
+  jobListings JobListing[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([location])
+  @@map("companies")
+}
+
+model JobListing {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  title         String
+  description   String  @db.Text
+  requirements  String? @db.Text
+  benefits      String? @db.Text
+  salary        String?
+  salaryMin     Int?
+  salaryMax     Int?
+  currency      String?
+  location      String?
+  city          String?
+  country       String?
+  isRemote      Boolean @default(false)
+  isHybrid      Boolean @default(false)
+  jobType       String?
+  seniorityLevel String?
+
+  sourceUrl  String?
+  sourceAts  String?
+  externalId String?
+
+  isActive  Boolean   @default(true)
+  isLia     Boolean   @default(false)
+  postedAt  DateTime?
+  closingAt DateTime?
+
+  matches      JobMatch[]
+  applications Application[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([title])
+  @@index([location])
+  @@index([isActive])
+  @@index([isLia])
+  @@index([createdAt])
+  @@map("job_listings")
+}
+
+model JobMatch {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobListingId String
+  jobListing   JobListing @relation(fields: [jobListingId], references: [id])
+  cvId         String?
+  cv           CV?        @relation(fields: [cvId], references: [id])
+
+  score           Float
+  tier            String
+  missingSkills   String[]
+  strengths       String[]
+  recommendations String[]
+  aiSummary       String? @db.Text
+  aiReasoning     String? @db.Text
+  rawAnalysis     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, jobListingId])
+  @@index([userId])
+  @@index([score])
+  @@map("job_matches")
+}
+
+model Application {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobListingId String?
+  jobListing   JobListing? @relation(fields: [jobListingId], references: [id])
+
+  companyName   String
+  jobTitle      String
+  jobUrl        String?
+  status        AppStatus @default(SAVED)
+  score         Float?
+
+  appliedAt    DateTime?
+  respondedAt  DateTime?
+  interviewAt  DateTime?
+
+  notes        String? @db.Text
+  salary       String?
+
+  generatedCVId  String?
+  coverLetterId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([userId, status])
+  @@index([createdAt])
+  @@map("applications")
+}
+
+model GeneratedCV {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  content     String @db.Text
+  htmlContent String? @db.Text
+  fileUrl     String?
+  format      String @default("pdf")
+
+  jobTitle    String?
+  companyName String?
+  language    String @default("en")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("generated_cvs")
+}
+
+model CoverLetter {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  content     String @db.Text
+  fileUrl     String?
+
+  jobTitle    String?
+  companyName String?
+  language    String @default("en")
+  tone        String @default("professional")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("cover_letters")
+}
+
+model SearchTask {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    SearchType
+  status  TaskStatus @default(PENDING)
+  query   Json
+  results Json?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  error       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("search_tasks")
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan             String @default("free")
+  stripeCustomerId String?
+  stripeSubId      String?
+  status           String @default("active")
+
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean @default(false)
+
+  aiCallsThisMonth   Int @default(0)
+  aiCallsLimit       Int @default(50)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+model AuditLog {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
