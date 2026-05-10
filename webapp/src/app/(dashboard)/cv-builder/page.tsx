@@ -3,6 +3,13 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Sparkles, Loader2, Download, Copy, RotateCcw } from 'lucide-react'
+import {
+  copyCleanText,
+  downloadCleanText,
+  downloadCleanWordDocument,
+  exportCleanPdf,
+  markdownToPlainText,
+} from '@/lib/document-actions'
 
 export default function CVBuilderPage() {
   const [jobTitle, setJobTitle] = useState('')
@@ -11,6 +18,7 @@ export default function CVBuilderPage() {
   const [language, setLanguage] = useState<'sv' | 'en'>('sv')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ content: string; id: string } | null>(null)
+  const [editingResult, setEditingResult] = useState(false)
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault()
@@ -28,6 +36,7 @@ export default function CVBuilderPage() {
       }
       const data = await res.json()
       setResult(data)
+      setEditingResult(false)
       toast.success('CV anpassat!')
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Fel vid generering')
@@ -36,11 +45,28 @@ export default function CVBuilderPage() {
     }
   }
 
-  function handleCopy() {
-    if (result) {
-      navigator.clipboard.writeText(result.content)
-      toast.success('Kopierat!')
-    }
+  async function handleCopy() {
+    if (!result) return
+    await copyCleanText(result.content)
+    toast.success('Kopierat som ren text!')
+  }
+
+  function handleExportPdf() {
+    if (!result) return
+    exportCleanPdf(result.content, `Anpassat CV - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('PDF laddas ner')
+  }
+
+  function handleDownloadWord() {
+    if (!result) return
+    downloadCleanWordDocument(result.content, `Anpassat CV - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('Word-fil laddas ner')
+  }
+
+  function handleDownloadText() {
+    if (!result) return
+    downloadCleanText(result.content, `Anpassat CV - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('Textfil laddas ner')
   }
 
   return (
@@ -118,11 +144,25 @@ export default function CVBuilderPage() {
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-semibold text-slate-900">Resultat</h2>
             {result && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
+                <button onClick={() => setEditingResult((value) => !value)} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  {editingResult ? 'Förhandsvisa' : 'Redigera'}
+                </button>
                 <button onClick={handleCopy} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
                   <Copy className="h-3.5 w-3.5" />
                   Kopiera
                 </button>
+                <details className="relative">
+                  <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                    <Download className="h-3.5 w-3.5" />
+                    Exportera
+                  </summary>
+                  <div className="absolute right-0 z-20 mt-2 w-36 rounded-lg border bg-white p-1 shadow-lg">
+                    <button onClick={handleExportPdf} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">PDF</button>
+                    <button onClick={handleDownloadWord} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Word (.doc)</button>
+                    <button onClick={handleDownloadText} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Text (.txt)</button>
+                  </div>
+                </details>
                 <button onClick={() => setResult(null)} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
                   <RotateCcw className="h-3.5 w-3.5" />
                   Rensa
@@ -131,9 +171,28 @@ export default function CVBuilderPage() {
             )}
           </div>
           {result ? (
-            <pre className="whitespace-pre-wrap text-sm text-slate-700 font-sans leading-relaxed max-h-96 overflow-y-auto">
-              {result.content}
-            </pre>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">Kontrollera innan du exporterar</p>
+                <ul className="mt-2 space-y-1">
+                  <li>• Stämmer kontaktuppgifter, datum och arbetsgivare?</li>
+                  <li>• Är texten sann mot din faktiska erfarenhet?</li>
+                  <li>• Matchar rubriker och nyckelord jobbannonsen?</li>
+                  <li>• Kontrollera ansökningslänk, adress och sista ansökningsdag i annonsen.</li>
+                </ul>
+              </div>
+              {editingResult ? (
+                <textarea
+                  value={result.content}
+                  onChange={(event) => setResult({ ...result, content: event.target.value })}
+                  className="h-96 w-full rounded-lg border bg-white p-4 text-sm leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              ) : (
+                <pre className="whitespace-pre-wrap text-sm text-slate-700 font-sans leading-relaxed max-h-96 overflow-y-auto">
+                  {markdownToPlainText(result.content)}
+                </pre>
+              )}
+            </div>
           ) : loading ? (
             <div className="flex flex-col items-center justify-center py-20">
               <Loader2 className="h-10 w-10 animate-spin text-blue-600" />

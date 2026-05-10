@@ -63,7 +63,7 @@ export default function PricingPage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <BrainCircuit className="h-6 w-6 text-blue-600" />
-            <span className="text-xl font-bold text-slate-900">CareerOps AI</span>
+            <span className="text-xl font-bold text-slate-900">CareerBridge AI</span>
           </Link>
           <div className="flex gap-3">
             <Link href="/login" className="text-sm font-medium text-slate-600 hover:text-slate-900">Logga in</Link>

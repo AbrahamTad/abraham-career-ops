@@ -11,6 +11,7 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault()
@@ -30,8 +31,6 @@ export default function SettingsPage() {
   }
 
   async function handleDeleteAccount() {
-    if (!confirm('VARNING: Detta tar bort ditt konto och all data permanent. Fortsätta?')) return
-    if (!confirm('Är du helt säker?')) return
     setDeleting(true)
     try {
       const res = await fetch('/api/account', { method: 'DELETE' })
@@ -44,6 +43,7 @@ export default function SettingsPage() {
       toast.error('Fel vid borttagning av konto')
     } finally {
       setDeleting(false)
+      setShowDeleteConfirm(false)
     }
   }
 
@@ -101,14 +101,37 @@ export default function SettingsPage() {
         <p className="mb-4 text-sm text-red-700">
           Att ta bort ditt konto är permanent och kan inte ångras. All data raderas.
         </p>
-        <button
-          onClick={handleDeleteAccount}
-          disabled={deleting}
-          className="flex items-center gap-2 rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-        >
-          {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-          Ta bort konto permanent
-        </button>
+        {!showDeleteConfirm ? (
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="flex items-center gap-2 rounded-lg border border-red-300 bg-white px-5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-600 hover:text-white transition-colors"
+          >
+            <Trash2 className="h-4 w-4" />
+            Ta bort konto permanent
+          </button>
+        ) : (
+          <div className="rounded-lg border border-red-300 bg-white p-4 space-y-3">
+            <p className="text-sm font-semibold text-red-800">Är du helt säker? Detta går inte att ångra.</p>
+            <p className="text-xs text-red-600">Alla dina ansökningar, CV-data och inställningar raderas permanent.</p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleting}
+                className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+                Ja, ta bort allt
+              </button>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="rounded-lg border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Avbryt
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

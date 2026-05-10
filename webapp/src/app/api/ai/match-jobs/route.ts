@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { matchJobToCv } from '@/lib/ai/claude'
+import { getFriendlyAIError, matchJobToCv } from '@/lib/ai/service'
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth()
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const matchText = await matchJobToCv(cv.rawText, job.description, job.title)
-    const matchData = JSON.parse(matchText)
+    const matchData = JSON.parse(matchText.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim())
 
     const jobMatch = await prisma.jobMatch.upsert({
       where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId } },
@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ match: jobMatch })
   } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Matchning misslyckades' }, { status: 500 })
+    const { message, status } = getFriendlyAIError(err, 'Matchning misslyckades')
+    return NextResponse.json({ error: message }, { status })
   }
 }

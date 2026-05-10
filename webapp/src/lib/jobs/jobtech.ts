@@ -1,0 +1,126 @@
+export interface ExternalJob {
+  externalId: string
+  sourceAts: string
+  title: string
+  description: string
+  companyName: string
+  companyLogoUrl?: string | null
+  sourceUrl?: string | null
+  location?: string | null
+  city?: string | null
+  country?: string | null
+  jobType?: string | null
+  salary?: string | null
+  isRemote?: boolean
+  isHybrid?: boolean
+  postedAt?: Date | null
+  closingAt?: Date | null
+}
+
+interface JobTechHit {
+  id: string
+  webpage_url?: string | null
+  logo_url?: string | null
+  headline?: string | null
+  description?: { text?: string | null }
+  employer?: { name?: string | null; workplace?: string | null }
+  application_details?: { url?: string | null }
+  workplace_address?: {
+    municipality?: string | null
+    city?: string | null
+    region?: string | null
+    country?: string | null
+  }
+  employment_type?: { label?: string | null }
+  working_hours_type?: { label?: string | null }
+  salary_description?: string | null
+  publication_date?: string | null
+  application_deadline?: string | null
+  last_publication_date?: string | null
+  removed?: boolean
+}
+
+interface JobTechResponse {
+  hits?: JobTechHit[]
+}
+
+function parseDate(value?: string | null): Date | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function compact(values: Array<string | null | undefined>): string[] {
+  return values.filter((value): value is string => Boolean(value?.trim()))
+}
+
+function buildQuery(term: string, location?: string): string {
+  return compact([term, location]).join(' ')
+}
+
+export async function searchJobTech(term: string, location = '', limit = 25): Promise<ExternalJob[]> {
+  const q = buildQuery(term, location)
+  if (!q) return []
+
+  const params = new URLSearchParams({
+    q,
+    limit: String(limit),
+    offset: '0',
+  })
+
+  const response = await fetch(`https://jobsearch.api.jobtechdev.se/search?${params}`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`JobTech search failed with status ${response.status}`)
+  }
+
+  const data = await response.json() as JobTechResponse
+  const jobs = data.hits ?? []
+
+  return jobs
+    .filter((job) => job.id && !job.removed)
+    .map((job) => {
+      const address = job.workplace_address
+      const companyName = job.employer?.name ?? job.employer?.workplace ?? 'Okänd arbetsgivare'
+      const description = job.description?.text ?? job.headline ?? ''
+      const locationText = compact([address?.city, address?.municipality, address?.region])
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .join(', ')
+
+      return {
+        externalId: job.id,
+        sourceAts: 'jobtech',
+        title: job.headline ?? 'Namnlös tjänst',
+        description,
+        companyName,
+        companyLogoUrl: job.logo_url,
+        sourceUrl: job.application_details?.url ?? job.webpage_url,
+        location: locationText || address?.country || 'Sverige',
+        city: address?.city ?? address?.municipality ?? null,
+        country: address?.country ?? 'Sverige',
+        jobType: compact([job.employment_type?.label, job.working_hours_type?.label]).join(' · ') || null,
+        salary: job.salary_description,
+        isRemote: description.toLowerCase().includes('distans'),
+        isHybrid: description.toLowerCase().includes('hybrid'),
+        postedAt: parseDate(job.publication_date),
+        closingAt: parseDate(job.application_deadline ?? job.last_publication_date),
+      }
+    })
+}
+
+export function uniqueExternalJobs(jobs: ExternalJob[]): ExternalJob[] {
+  const seen = new Set<string>()
+  const unique: ExternalJob[] = []
+
+  for (const job of jobs) {
+    const key = `${job.sourceAts}:${job.externalId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(job)
+  }
+
+  return unique
+}

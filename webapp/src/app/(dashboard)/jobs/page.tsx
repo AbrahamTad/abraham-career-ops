@@ -1,13 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Search, Filter, Loader2, Star, ExternalLink, BookmarkPlus } from 'lucide-react'
+import { Search, Filter, Loader2, ExternalLink, BookmarkPlus, BrainCircuit, Sparkles, FileText, Copy, X, MapPin, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatSalary } from '@/lib/utils'
+import {
+  copyCleanText,
+  downloadCleanText,
+  downloadCleanWordDocument,
+  exportCleanPdf,
+  markdownToPlainText,
+} from '@/lib/document-actions'
 
 interface JobListing {
   id: string
   title: string
+  description: string
   location: string | null
   isRemote: boolean
   isHybrid: boolean
@@ -17,21 +25,71 @@ interface JobListing {
   currency: string | null
   sourceUrl: string | null
   postedAt: string | null
+  closingAt: string | null
   jobType: string | null
   company: { name: string; logoUrl: string | null }
   match?: { score: number; tier: string } | null
 }
 
+interface SmartSearchResult {
+  newJobs: number
+  totalFound: number
+  imported?: number
+  autoMatched: number
+  searchedFor: string[]
+  candidateSummary: string
+  source?: string
+  location?: string
+}
+
+interface ProfileLocation {
+  city?: string | null
+  location?: string | null
+}
+
+interface AdaptedCVResult {
+  content: string
+  id: string
+  jobTitle: string
+  companyName: string
+  sourceUrl: string | null
+  location: string | null
+  closingAt: string | null
+}
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobListing[]>([])
   const [loading, setLoading] = useState(true)
-  const [searching, setSearching] = useState(false)
+  const [smartSearching, setSmartSearching] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [matchingId, setMatchingId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [location, setLocation] = useState('')
   const [liaOnly, setLiaOnly] = useState(false)
   const [remoteOnly, setRemoteOnly] = useState(false)
+  const [lastSmartResult, setLastSmartResult] = useState<SmartSearchResult | null>(null)
+  const [profileLocation, setProfileLocation] = useState('')
+  const [adaptingId, setAdaptingId] = useState<string | null>(null)
+  const [adaptedCV, setAdaptedCV] = useState<AdaptedCVResult | null>(null)
+  const [editingAdaptedCV, setEditingAdaptedCV] = useState(false)
 
-  useEffect(() => { loadJobs() }, [])
+  const searchSteps = [
+    'Läser CV och hittar relevanta roller',
+    'Söker i Platsbanken och jobbannonser',
+    'Filtrerar på område och arbetsplats',
+    'Matchar de bästa jobben med AI',
+  ]
+
+  useEffect(() => {
+    loadJobs()
+    loadProfileLocation()
+  }, [])
+
+  function createTimeoutSignal(ms: number) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), ms)
+    return { signal: controller.signal, clear: () => window.clearTimeout(timeout) }
+  }
 
   async function loadJobs(params?: URLSearchParams) {
     setLoading(true)
@@ -40,10 +98,60 @@ export default function JobsPage() {
       const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
-        setJobs(data.jobs)
+        // Sort by match score if available
+        const sorted = [...(data.jobs as JobListing[])].sort((a, b) => {
+          if (a.match && b.match) return b.match.score - a.match.score
+          if (a.match) return -1
+          if (b.match) return 1
+          return 0
+        })
+        setJobs(sorted)
       }
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadProfileLocation() {
+    const res = await fetch('/api/profile')
+    if (!res.ok) return
+    const data = await res.json() as { profile?: ProfileLocation | null }
+    const place = data.profile?.city || data.profile?.location || ''
+    setProfileLocation(place)
+    setLocation((current) => current || place)
+  }
+
+  async function handleSmartSearch() {
+    setSmartSearching(true)
+    setLastSmartResult(null)
+    toast.info('AI läser ditt CV och söker efter matchande jobb...')
+    const timeout = createTimeoutSignal(60000)
+    try {
+      const res = await fetch('/api/jobs/smart-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, location, liaOnly, remoteOnly }),
+        signal: timeout.signal,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setLastSmartResult(data)
+      toast.success(`Hittade ${data.totalFound} jobb, importerade ${data.imported ?? data.newJobs}`)
+      const params = new URLSearchParams()
+      if (query) params.set('q', query)
+      if (location) params.set('location', location)
+      if (liaOnly) params.set('lia', '1')
+      if (remoteOnly) params.set('remote', '1')
+      await loadJobs(params)
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        toast.error('Sökningen tog för lång tid. Prova igen med en specifik roll och stad.')
+        return
+      }
+      toast.error(err instanceof Error ? err.message : 'Smart sökning misslyckades')
+    } finally {
+      timeout.clear()
+      setSmartSearching(false)
     }
   }
 
@@ -55,6 +163,95 @@ export default function JobsPage() {
     if (liaOnly) params.set('lia', '1')
     if (remoteOnly) params.set('remote', '1')
     await loadJobs(params)
+  }
+
+  async function handleMatch(jobId: string) {
+    setMatchingId(jobId)
+    try {
+      const res = await fetch('/api/ai/match-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobListingId: jobId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success(`Matchningspoäng: ${data.match.score.toFixed(1)}/5`)
+      setJobs(prev => {
+        const updated = prev.map(j => j.id === jobId ? { ...j, match: { score: data.match.score, tier: data.match.tier } } : j)
+        return [...updated].sort((a, b) => {
+          if (a.match && b.match) return b.match.score - a.match.score
+          if (a.match) return -1
+          if (b.match) return 1
+          return 0
+        })
+      })
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Matchning misslyckades')
+    } finally {
+      setMatchingId(null)
+    }
+  }
+
+  async function handleAdaptCV(job: JobListing) {
+    setAdaptingId(job.id)
+    setAdaptedCV(null)
+    setEditingAdaptedCV(false)
+    try {
+      const res = await fetch('/api/cv/adapt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobTitle: job.title,
+          companyName: job.company.name,
+          jobDescription: job.description,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setAdaptedCV({
+        content: data.content,
+        id: data.id,
+        jobTitle: job.title,
+        companyName: job.company.name,
+        sourceUrl: job.sourceUrl,
+        location: job.location,
+        closingAt: job.closingAt,
+      })
+      toast.success('Anpassat CV klart')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Kunde inte anpassa CV')
+    } finally {
+      setAdaptingId(null)
+    }
+  }
+
+  async function copyAdaptedCV() {
+    if (!adaptedCV) return
+    await copyCleanText(adaptedCV.content)
+    toast.success('CV kopierat som ren text')
+  }
+
+  function exportAdaptedCV() {
+    if (!adaptedCV) return
+    exportCleanPdf(adaptedCV.content, `Anpassat CV - ${adaptedCV.jobTitle}`)
+    toast.success('PDF laddas ner')
+  }
+
+  function downloadAdaptedCVWord() {
+    if (!adaptedCV) return
+    downloadCleanWordDocument(adaptedCV.content, `Anpassat CV - ${adaptedCV.jobTitle}`)
+    toast.success('Word-fil laddas ner')
+  }
+
+  function downloadAdaptedCVText() {
+    if (!adaptedCV) return
+    downloadCleanText(adaptedCV.content, `Anpassat CV - ${adaptedCV.jobTitle}`)
+    toast.success('Textfil laddas ner')
+  }
+
+  function formatDate(date: string | null) {
+    if (!date) return 'Se jobbannonsen'
+    return new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium' }).format(new Date(date))
   }
 
   async function handleSave(jobId: string) {
@@ -72,18 +269,29 @@ export default function JobsPage() {
   }
 
   async function handleScanPortals() {
-    setSearching(true)
-    toast.info('Söker på jobbportaler... Det kan ta en stund.')
+    setScanning(true)
+    const timeout = createTimeoutSignal(45000)
     try {
-      const res = await fetch('/api/jobs/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, location, liaOnly }) })
+      const res = await fetch('/api/jobs/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, location, liaOnly }),
+        signal: timeout.signal,
+      })
       if (!res.ok) throw new Error()
       const data = await res.json()
-      toast.success(`Hittade ${data.count} nya jobb!`)
-      await loadJobs()
+      toast.success(`Skanning klar — ${data.count} nya jobb tillagda (${data.imported ?? data.count} importerade)`)
+      const params = new URLSearchParams()
+      if (query) params.set('q', query)
+      if (location) params.set('location', location)
+      if (liaOnly) params.set('lia', '1')
+      if (remoteOnly) params.set('remote', '1')
+      await loadJobs(params)
     } catch {
       toast.error('Scanning misslyckades')
     } finally {
-      setSearching(false)
+      timeout.clear()
+      setScanning(false)
     }
   }
 
@@ -93,22 +301,57 @@ export default function JobsPage() {
     weak: 'bg-red-100 text-red-700',
   }
 
+  const tierLabel: Record<string, string> = {
+    strong: 'Stark match',
+    medium: 'Bra match',
+    weak: 'Svag match',
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Jobbsökning</h1>
-          <p className="mt-1 text-slate-500">Hitta och matcha relevanta tjänster med AI</p>
+          <p className="mt-1 text-slate-500">AI söker och matchar jobb baserat på ditt CV</p>
         </div>
-        <button
-          onClick={handleScanPortals}
-          disabled={searching}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          Skanna portaler
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleScanPortals}
+            disabled={scanning || smartSearching}
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            Skanna
+          </button>
+          <button
+            onClick={handleSmartSearch}
+            disabled={smartSearching || scanning}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {smartSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {smartSearching ? 'Söker...' : 'Sök med CV'}
+          </button>
+        </div>
       </div>
+
+      {/* Smart search result banner */}
+      {lastSmartResult && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+          <div className="flex items-start gap-3">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-blue-900">{lastSmartResult.candidateSummary}</p>
+              <p className="mt-1 text-xs text-blue-700">
+                Sökte efter: <span className="font-medium">{lastSmartResult.searchedFor.join(', ')}</span>
+                {' · '}{lastSmartResult.totalFound} jobb hittade · {lastSmartResult.imported ?? lastSmartResult.newJobs} importerade · {lastSmartResult.autoMatched} AI-matchade
+                {lastSmartResult.source ? ` · ${lastSmartResult.source}` : ''}
+              </p>
+            </div>
+            <button onClick={() => setLastSmartResult(null)} className="shrink-0 text-blue-400 hover:text-blue-600">✕</button>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <form onSubmit={handleSearch} className="rounded-xl border bg-white p-4">
@@ -143,23 +386,214 @@ export default function JobsPage() {
             Filtrera
           </button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span>Område:</span>
+          {profileLocation && (
+            <button
+              type="button"
+              onClick={() => setLocation(profileLocation)}
+              className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600"
+            >
+              <MapPin className="h-3 w-3" />
+              Nära mig: {profileLocation}
+            </button>
+          )}
+          {['Göteborg', 'Mölndal', 'Partille', 'Kungälv'].map((place) => (
+            <button
+              key={place}
+              type="button"
+              onClick={() => setLocation(place)}
+              className="rounded-full border px-2.5 py-1 font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600"
+            >
+              {place}
+            </button>
+          ))}
+        </div>
       </form>
 
+      {adaptedCV && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-slate-900">Anpassat CV</h2>
+              <p className="mt-1 text-sm text-slate-500">{adaptedCV.jobTitle} · {adaptedCV.companyName}</p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button onClick={() => setEditingAdaptedCV((value) => !value)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                {editingAdaptedCV ? 'Förhandsvisa' : 'Redigera'}
+              </button>
+              <button onClick={copyAdaptedCV} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                <Copy className="h-3.5 w-3.5" />
+                Kopiera
+              </button>
+              <details className="relative">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  <Download className="h-3.5 w-3.5" />
+                  Exportera
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 w-36 rounded-lg border bg-white p-1 shadow-lg">
+                  <button onClick={exportAdaptedCV} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">PDF</button>
+                  <button onClick={downloadAdaptedCVWord} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Word (.doc)</button>
+                  <button onClick={downloadAdaptedCVText} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Text (.txt)</button>
+                </div>
+              </details>
+              <button onClick={() => setAdaptedCV(null)} className="rounded-lg border p-1.5 text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="mb-4 grid gap-3 text-sm md:grid-cols-3">
+            <div className="rounded-lg border bg-slate-50 p-3">
+              <p className="font-semibold text-slate-900">Hur du söker</p>
+              <p className="mt-1 text-slate-600">
+                Öppna annonsen, kontrollera instruktionerna och bifoga ditt anpassade CV.
+              </p>
+              {adaptedCV.sourceUrl && (
+                <a href={adaptedCV.sourceUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
+                  Öppna jobbannons <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+            <div className="rounded-lg border bg-slate-50 p-3">
+              <p className="font-semibold text-slate-900">Arbetsplats</p>
+              <p className="mt-1 text-slate-600">{adaptedCV.location || 'Se jobbannonsen'}</p>
+            </div>
+            <div className="rounded-lg border bg-slate-50 p-3">
+              <p className="font-semibold text-slate-900">Sista ansökningsdag</p>
+              <p className="mt-1 text-slate-600">{formatDate(adaptedCV.closingAt)}</p>
+            </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <p className="font-semibold">Kontrollera innan du exporterar</p>
+            <ul className="mt-2 space-y-1">
+              <li>• Läs igenom och redigera texten så den låter som dig.</li>
+              <li>• Kontrollera telefon, e-post, datum och arbetsgivare.</li>
+              <li>• Ta bort allt som inte stämmer med din faktiska erfarenhet.</li>
+              <li>• Kontrollera om arbetsgivaren vill ha CV, personligt brev eller formulärsvar.</li>
+            </ul>
+          </div>
+          {editingAdaptedCV ? (
+            <textarea
+              value={adaptedCV.content}
+              onChange={(event) => setAdaptedCV({ ...adaptedCV, content: event.target.value })}
+              className="h-96 w-full rounded-lg border bg-white p-4 text-sm leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+          ) : (
+            <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-4 font-sans text-sm leading-relaxed text-slate-700">
+              {markdownToPlainText(adaptedCV.content)}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Smart search loading state */}
+      {smartSearching && (
+        <div className="overflow-hidden rounded-xl border bg-white">
+          <div className="relative border-b bg-blue-50 px-6 py-6">
+            <div className="absolute inset-x-0 bottom-0 h-1 overflow-hidden bg-blue-100">
+              <div className="h-full w-1/3 animate-[searchbar_1.4s_ease-in-out_infinite] bg-blue-600" />
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
+                <Sparkles className="h-6 w-6 animate-pulse" />
+                <span className="absolute inset-0 animate-ping rounded-full bg-blue-400 opacity-30" />
+              </div>
+              <div>
+                <p className="font-semibold text-slate-900">AI söker efter rätt jobb...</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Det kan ta en liten stund när vi söker brett och matchar mot ditt CV.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-6 p-6 lg:grid-cols-[1fr_1.2fr]">
+            <div className="space-y-3">
+              {searchSteps.map((step, index) => (
+                <div key={step} className="flex items-center gap-3 rounded-lg border bg-white p-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-700">
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-700">{step}</p>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full bg-blue-500"
+                        style={{
+                          width: `${70 - index * 12}%`,
+                          animation: `pulse ${1.2 + index * 0.18}s ease-in-out infinite`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-lg border bg-slate-50 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Live search</span>
+                <span className="flex items-center gap-1.5 text-xs font-medium text-blue-600">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
+                  arbetar
+                </span>
+              </div>
+              <div className="space-y-3">
+                {[0, 1, 2].map((item) => (
+                  <div
+                    key={item}
+                    className="animate-pulse rounded-lg border bg-white p-4"
+                    style={{ animationDelay: `${item * 160}ms` }}
+                  >
+                    <div className="mb-3 h-3 w-2/3 rounded bg-slate-200" />
+                    <div className="mb-2 h-2.5 w-1/2 rounded bg-blue-100" />
+                    <div className="flex gap-2">
+                      <div className="h-2 w-16 rounded bg-slate-200" />
+                      <div className="h-2 w-20 rounded bg-slate-200" />
+                      <div className="h-2 w-14 rounded bg-slate-200" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <style jsx>{`
+            @keyframes searchbar {
+              0% { transform: translateX(-120%); }
+              50% { transform: translateX(120%); }
+              100% { transform: translateX(320%); }
+            }
+          `}</style>
+        </div>
+      )}
+
       {/* Job list */}
-      {loading ? (
+      {!smartSearching && (loading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
         </div>
       ) : jobs.length === 0 ? (
         <div className="rounded-xl border bg-white py-16 text-center">
-          <Search className="mx-auto mb-3 h-10 w-10 text-slate-300" />
-          <p className="font-medium text-slate-600">Inga jobb hittade</p>
-          <p className="mt-1 text-sm text-slate-400">Prova att skanna portaler eller ändra sökkriterierna</p>
+          <Sparkles className="mx-auto mb-3 h-10 w-10 text-slate-200" />
+          <p className="font-medium text-slate-600">Inga jobb hittade ännu</p>
+          <p className="mt-1 text-sm text-slate-400">Klicka på "Sök med CV" — AI hittar jobb som passar dig</p>
+          <button
+            onClick={handleSmartSearch}
+            disabled={smartSearching}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            <Sparkles className="h-4 w-4" />
+            Sök med CV
+          </button>
         </div>
       ) : (
         <div className="space-y-3">
           {jobs.map((job) => (
-            <div key={job.id} className="rounded-xl border bg-white p-5 hover:shadow-sm transition-shadow">
+            <div
+              key={job.id}
+              className={`rounded-xl border bg-white p-5 transition-shadow hover:shadow-sm ${job.match?.tier === 'strong' ? 'border-green-200' : ''}`}
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -169,7 +603,7 @@ export default function JobsPage() {
                     )}
                     {job.match && (
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tierColors[job.match.tier]}`}>
-                        {job.match.score.toFixed(1)}/5
+                        {job.match.score.toFixed(1)}/5 · {tierLabel[job.match.tier]}
                       </span>
                     )}
                   </div>
@@ -185,6 +619,26 @@ export default function JobsPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {!job.match && (
+                    <button
+                      onClick={() => handleMatch(job.id)}
+                      disabled={matchingId === job.id}
+                      title="Matcha med AI"
+                      className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600 disabled:opacity-50"
+                    >
+                      {matchingId === job.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BrainCircuit className="h-3.5 w-3.5" />}
+                      Matcha
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleAdaptCV(job)}
+                    disabled={adaptingId === job.id}
+                    title="Anpassa CV för jobbet"
+                    className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600 disabled:opacity-50"
+                  >
+                    {adaptingId === job.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                    Anpassa CV
+                  </button>
                   <button
                     onClick={() => handleSave(job.id)}
                     title="Spara"
@@ -208,7 +662,7 @@ export default function JobsPage() {
             </div>
           ))}
         </div>
-      )}
+      ))}
     </div>
   )
 }

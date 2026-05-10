@@ -7,8 +7,8 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 
 export const metadata: Metadata = {
   title: {
-    default: 'CareerOps AI — AI-Driven Job Search',
-    template: '%s | CareerOps AI',
+    default: 'CareerBridge AI — AI-Driven Job Search',
+    template: '%s | CareerBridge AI',
   },
   description:
     'Find the right job or LIA placement with AI-powered CV analysis, job matching, and tailored applications. Built for the Swedish job market.',
@@ -17,7 +17,7 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'sv_SE',
     url: process.env.NEXT_PUBLIC_APP_URL,
-    title: 'CareerOps AI',
+    title: 'CareerBridge AI',
     description: 'AI-Driven Job Search for the Swedish market',
   },
 }

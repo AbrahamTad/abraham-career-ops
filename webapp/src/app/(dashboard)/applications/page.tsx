@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import { Loader2, Plus, Trash2, ExternalLink } from 'lucide-react'
-import { formatDate, APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
+import { APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/types'
 import type { AppStatusType } from '@/types'
 
 interface Application {
@@ -25,6 +26,7 @@ export default function ApplicationsPage() {
   const [filter, setFilter] = useState<AppStatusType | 'ALL'>('ALL')
   const [showAdd, setShowAdd] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -52,10 +54,10 @@ export default function ApplicationsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Ta bort ansökan?')) return
     const res = await fetch(`/api/applications/${id}`, { method: 'DELETE' })
     if (res.ok) {
       setApps(apps.filter((a) => a.id !== id))
+      setDeleteId(null)
       toast.success('Ansökan borttagen')
     }
   }
@@ -199,9 +201,27 @@ export default function ApplicationsPage() {
                           <ExternalLink className="h-4 w-4" />
                         </a>
                       )}
-                      <button onClick={() => handleDelete(app.id)} className="text-slate-400 hover:text-red-500">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {deleteId === app.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-slate-500">Säker?</span>
+                          <button
+                            onClick={() => handleDelete(app.id)}
+                            className="rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700"
+                          >
+                            Ja
+                          </button>
+                          <button
+                            onClick={() => setDeleteId(null)}
+                            className="rounded border px-2 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                          >
+                            Nej
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setDeleteId(app.id)} className="text-slate-400 hover:text-red-500">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

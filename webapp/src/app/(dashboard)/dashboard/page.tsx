@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import prisma from '@/lib/prisma'
 import Link from 'next/link'
 import { ArrowRight, BrainCircuit, ClipboardList, Search, TrendingUp } from 'lucide-react'
-import { formatDate, APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
+import { APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/types'
 import type { AppStatusType } from '@/types'
 
 export const metadata = { title: 'Dashboard' }

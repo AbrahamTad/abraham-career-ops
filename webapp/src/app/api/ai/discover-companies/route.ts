@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { discoverCompanies } from '@/lib/ai/claude'
+import { discoverCompanies, getFriendlyAIError } from '@/lib/ai/service'
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth()
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await discoverCompanies(cv.rawText, targetRole, location, liaFocus)
-    const companies = JSON.parse(result)
+    const companies = JSON.parse(result.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim())
 
     if (subscription) {
       await prisma.subscription.update({
@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ companies })
   } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Sökning misslyckades' }, { status: 500 })
+    const { message, status } = getFriendlyAIError(err, 'Sökning misslyckades')
+    return NextResponse.json({ error: message }, { status })
   }
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { analyzeCV } from '@/lib/ai/claude'
+import { analyzeCV, getFriendlyAIError } from '@/lib/ai/service'
 
 export async function POST() {
   const auth = await requireAuth()
@@ -21,7 +21,17 @@ export async function POST() {
 
   try {
     const analysisText = await analyzeCV(cv.rawText)
-    const parsedData = JSON.parse(analysisText)
+    // Claude sometimes wraps JSON in markdown code blocks — strip them
+    const cleaned = analysisText.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parsedData: any
+    try {
+      parsedData = JSON.parse(cleaned)
+    } catch {
+      // If Claude returns non-parseable output, store a minimal stub so the CV is still usable
+      parsedData = { raw: cleaned, parseError: true }
+    }
 
     await prisma.cV.update({
       where: { id: cv.id },
@@ -35,26 +45,31 @@ export async function POST() {
       })
     }
 
-    // Auto-update profile with extracted data
-    if (parsedData.skills?.length || parsedData.targetRoles?.length) {
+    // Auto-update profile with extracted data (only if parsing succeeded)
+    const skills = Array.isArray(parsedData.skills) ? parsedData.skills as string[] : []
+    const targetRoles = Array.isArray(parsedData.targetRoles) ? parsedData.targetRoles as string[] : []
+    const spokenLanguages = Array.isArray(parsedData.spokenLanguages) ? parsedData.spokenLanguages as string[] : []
+
+    if (skills.length || targetRoles.length) {
       await prisma.userProfile.upsert({
         where: { userId: auth.dbUserId },
         create: {
           userId: auth.dbUserId,
-          skills: parsedData.skills ?? [],
-          targetRoles: parsedData.targetRoles ?? [],
-          spokenLanguages: parsedData.spokenLanguages ?? [],
+          skills,
+          targetRoles,
+          spokenLanguages,
         },
         update: {
-          skills: parsedData.skills?.length ? parsedData.skills : undefined,
-          targetRoles: parsedData.targetRoles?.length ? parsedData.targetRoles : undefined,
-          spokenLanguages: parsedData.spokenLanguages?.length ? parsedData.spokenLanguages : undefined,
+          skills: skills.length ? skills : undefined,
+          targetRoles: targetRoles.length ? targetRoles : undefined,
+          spokenLanguages: spokenLanguages.length ? spokenLanguages : undefined,
         },
       })
     }
 
     return NextResponse.json({ analysis: parsedData })
   } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'AI-analys misslyckades' }, { status: 500 })
+    const { message, status } = getFriendlyAIError(err, 'AI-analys misslyckades')
+    return NextResponse.json({ error: message }, { status })
   }
 }

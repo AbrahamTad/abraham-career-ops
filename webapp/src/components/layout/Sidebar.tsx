@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useState, useEffect } from 'react'
 import {
   BrainCircuit,
   LayoutDashboard,
@@ -28,12 +29,22 @@ const nav = [
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const [usage, setUsage] = useState<{ used: number; limit: number; plan: string } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/subscription')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setUsage({ used: d.aiCallsThisMonth, limit: d.aiCallsLimit, plan: d.plan }))
+      .catch(() => {})
+  }, [])
+
+  const pct = usage ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 20
 
   return (
     <aside className="hidden w-60 flex-col border-r bg-white md:flex">
       <div className="flex h-16 items-center gap-2 border-b px-4">
         <BrainCircuit className="h-6 w-6 text-blue-600" />
-        <span className="font-bold text-slate-900">CareerOps AI</span>
+        <span className="font-bold text-slate-900">CareerBridge AI</span>
       </div>
       <nav className="flex-1 overflow-y-auto py-4">
         <ul className="space-y-1 px-2">
@@ -60,10 +71,12 @@ export default function Sidebar() {
       </nav>
       <div className="border-t p-4">
         <div className="rounded-lg bg-blue-50 p-3">
-          <p className="text-xs font-semibold text-blue-700">Gratis plan</p>
-          <p className="mt-0.5 text-xs text-blue-600">10/50 AI-analyser använda</p>
+          <p className="text-xs font-semibold text-blue-700 capitalize">{usage?.plan ?? 'Gratis'} plan</p>
+          <p className="mt-0.5 text-xs text-blue-600">
+            {usage ? `${usage.used}/${usage.limit} AI-analyser använda` : 'Laddar...'}
+          </p>
           <div className="mt-2 h-1.5 rounded-full bg-blue-100">
-            <div className="h-1.5 w-1/5 rounded-full bg-blue-500" />
+            <div className="h-1.5 rounded-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
           </div>
           <Link href="/pricing" className="mt-2 block text-xs font-medium text-blue-700 hover:underline">
             Uppgradera till Pro →

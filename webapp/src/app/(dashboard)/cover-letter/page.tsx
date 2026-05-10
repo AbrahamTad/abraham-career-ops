@@ -2,7 +2,14 @@
 
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Mail, Loader2, Copy, RotateCcw } from 'lucide-react'
+import { Mail, Loader2, Copy, RotateCcw, Download } from 'lucide-react'
+import {
+  copyCleanText,
+  downloadCleanText,
+  downloadCleanWordDocument,
+  exportCleanPdf,
+  markdownToPlainText,
+} from '@/lib/document-actions'
 
 export default function CoverLetterPage() {
   const [jobTitle, setJobTitle] = useState('')
@@ -12,6 +19,7 @@ export default function CoverLetterPage() {
   const [tone, setTone] = useState('professional')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<string | null>(null)
+  const [editingResult, setEditingResult] = useState(false)
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault()
@@ -26,12 +34,37 @@ export default function CoverLetterPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setResult(data.content)
+      setEditingResult(false)
       toast.success('Personligt brev genererat!')
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Fel vid generering')
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleCopy() {
+    if (!result) return
+    await copyCleanText(result)
+    toast.success('Kopierat som ren text!')
+  }
+
+  function handleExportPdf() {
+    if (!result) return
+    exportCleanPdf(result, `Personligt brev - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('PDF laddas ner')
+  }
+
+  function handleDownloadWord() {
+    if (!result) return
+    downloadCleanWordDocument(result, `Personligt brev - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('Word-fil laddas ner')
+  }
+
+  function handleDownloadText() {
+    if (!result) return
+    downloadCleanText(result, `Personligt brev - ${jobTitle || companyName || 'CareerBridge'}`)
+    toast.success('Textfil laddas ner')
   }
 
   return (
@@ -84,10 +117,23 @@ export default function CoverLetterPage() {
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-semibold text-slate-900">Personligt brev</h2>
             {result && (
-              <div className="flex gap-2">
-                <button onClick={() => { navigator.clipboard.writeText(result); toast.success('Kopierat!') }} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
+              <div className="flex flex-wrap justify-end gap-2">
+                <button onClick={() => setEditingResult((value) => !value)} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
+                  {editingResult ? 'Förhandsvisa' : 'Redigera'}
+                </button>
+                <button onClick={handleCopy} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
                   <Copy className="h-3.5 w-3.5" /> Kopiera
                 </button>
+                <details className="relative">
+                  <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
+                    <Download className="h-3.5 w-3.5" /> Exportera
+                  </summary>
+                  <div className="absolute right-0 z-20 mt-2 w-36 rounded-lg border bg-white p-1 shadow-lg">
+                    <button onClick={handleExportPdf} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">PDF</button>
+                    <button onClick={handleDownloadWord} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Word (.doc)</button>
+                    <button onClick={handleDownloadText} className="block w-full rounded-md px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Text (.txt)</button>
+                  </div>
+                </details>
                 <button onClick={() => setResult(null)} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
                   <RotateCcw className="h-3.5 w-3.5" /> Rensa
                 </button>
@@ -95,7 +141,26 @@ export default function CoverLetterPage() {
             )}
           </div>
           {result ? (
-            <div className="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed max-h-[500px] overflow-y-auto">{result}</div>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">Kontrollera innan du skickar</p>
+                <ul className="mt-2 space-y-1">
+                  <li>• Stämmer jobbtitel och företag?</li>
+                  <li>• Låter brevet som dig och inte för formellt?</li>
+                  <li>• Finns inget påhittat om erfarenhet, datum eller utbildning?</li>
+                  <li>• Kontrollera sista ansökningsdag och exakt ansökningssätt i jobbannonsen.</li>
+                </ul>
+              </div>
+              {editingResult ? (
+                <textarea
+                  value={result}
+                  onChange={(event) => setResult(event.target.value)}
+                  className="h-[500px] w-full rounded-lg border bg-white p-4 text-sm leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              ) : (
+                <div className="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed max-h-[500px] overflow-y-auto">{markdownToPlainText(result)}</div>
+              )}
+            </div>
           ) : loading ? (
             <div className="flex flex-col items-center justify-center py-20">
               <Loader2 className="h-10 w-10 animate-spin text-blue-600" />

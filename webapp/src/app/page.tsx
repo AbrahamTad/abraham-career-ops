@@ -9,7 +9,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-2">
             <BrainCircuit className="h-6 w-6 text-blue-600" />
-            <span className="text-xl font-bold text-slate-900">CareerOps AI</span>
+            <span className="text-xl font-bold text-slate-900">CareerBridge AI</span>
           </div>
           <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
             <Link href="#features" className="hover:text-slate-900">Funktioner</Link>
@@ -138,7 +138,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 text-sm text-slate-400">
           <div className="flex items-center gap-2">
             <BrainCircuit className="h-4 w-4" />
-            <span>CareerOps AI</span>
+            <span>CareerBridge AI</span>
           </div>
           <div className="flex gap-6">
             <Link href="/pricing" className="hover:text-slate-600">Priser</Link>

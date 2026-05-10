@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { adaptCV } from '@/lib/ai/claude'
+import { adaptCV, getFriendlyAIError } from '@/lib/ai/service'
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth()
@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ content, id: saved.id })
   } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Generering misslyckades' }, { status: 500 })
+    const { message, status } = getFriendlyAIError(err, 'Generering misslyckades')
+    return NextResponse.json({ error: message }, { status })
   }
 }

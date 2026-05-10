@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
-import { Upload, FileText, Loader2, CheckCircle, Trash2 } from 'lucide-react'
+import { Upload, FileText, Loader2, CheckCircle, Trash2, X, Sparkles } from 'lucide-react'
 
 export default function ProfilePage() {
   const [cv, setCv] = useState<{ id: string; fileName?: string | null; rawText: string; createdAt: string } | null>(null)
@@ -28,6 +28,9 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [dragOver, setDragOver] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
+  const [showPastePanel, setShowPastePanel] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -51,9 +54,23 @@ export default function ProfilePage() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  async function runAnalysis() {
+    setAnalyzing(true)
+    try {
+      const analyzeRes = await fetch('/api/ai/analyze-cv', { method: 'POST' })
+      if (analyzeRes.ok) {
+        toast.success('CV analyserat av AI')
+      } else {
+        const errData = await analyzeRes.json().catch(() => ({}))
+        toast.error(errData.error ?? 'AI-analys misslyckades')
+      }
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   async function handleFileUpload(file: File) {
-    const maxSize = 5 * 1024 * 1024 // 5MB
-    if (file.size > maxSize) {
+    if (file.size > 5 * 1024 * 1024) {
       toast.error('Filen är för stor. Max 5 MB.')
       return
     }
@@ -62,7 +79,6 @@ export default function ProfilePage() {
       toast.error('Filformat stöds inte. Använd PDF, DOCX eller TXT.')
       return
     }
-
     setUploading(true)
     const formData = new FormData()
     formData.append('file', file)
@@ -71,46 +87,45 @@ export default function ProfilePage() {
       if (!res.ok) throw new Error((await res.json()).error)
       toast.success('CV uppladdat!')
       await loadData()
-
-      // Auto-analyze
-      setAnalyzing(true)
-      const analyzeRes = await fetch('/api/ai/analyze-cv', { method: 'POST' })
-      if (analyzeRes.ok) toast.success('CV analyserat av AI')
-      else toast.error('AI-analys misslyckades – försök igen')
+      await runAnalysis()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Uppladdning misslyckades')
     } finally {
       setUploading(false)
-      setAnalyzing(false)
     }
   }
 
-  async function handlePasteCV() {
-    const text = prompt('Klistra in ditt CV som text:')
-    if (!text?.trim()) return
+  async function handlePasteSubmit() {
+    if (!pasteText.trim()) return
     setUploading(true)
     try {
       const res = await fetch('/api/cv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: pasteText.trim() }),
       })
       if (!res.ok) throw new Error((await res.json()).error)
       toast.success('CV sparat!')
+      setShowPastePanel(false)
+      setPasteText('')
       await loadData()
+      await runAnalysis()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Fel')
+      toast.error(err instanceof Error ? err.message : 'Kunde inte spara CV')
     } finally {
       setUploading(false)
     }
   }
 
   async function handleDeleteCV() {
-    if (!cv) return
-    if (!confirm('Ta bort ditt CV?')) return
     const res = await fetch('/api/cv', { method: 'DELETE' })
-    if (res.ok) { toast.success('CV borttaget'); setCv(null) }
-    else toast.error('Fel vid borttagning')
+    if (res.ok) {
+      toast.success('CV borttaget')
+      setCv(null)
+      setShowDeleteConfirm(false)
+    } else {
+      toast.error('Fel vid borttagning')
+    }
   }
 
   async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
@@ -163,58 +178,153 @@ export default function ProfilePage() {
         <p className="mt-1 text-slate-500">Hantera ditt CV och profilinformation</p>
       </div>
 
-      {/* CV Upload */}
+      {/* CV Section */}
       <div className="rounded-xl border bg-white p-6">
         <h2 className="mb-4 text-lg font-semibold text-slate-900">Ditt CV</h2>
+
         {cv ? (
-          <div className="rounded-lg border border-green-200 bg-green-50 p-4">
-            <div className="flex items-center justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4">
               <div className="flex items-center gap-3">
-                <CheckCircle className="h-5 w-5 text-green-600" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                </div>
                 <div>
-                  <p className="font-medium text-green-900">{cv.fileName ?? 'CV uppladdad'}</p>
-                  <p className="text-xs text-green-600">{cv.rawText.length.toLocaleString()} tecken</p>
+                  <p className="font-medium text-green-900">{cv.fileName ?? 'CV inklistrat'}</p>
+                  <p className="text-xs text-green-600">{cv.rawText.length.toLocaleString()} tecken extraherade</p>
                 </div>
               </div>
-              <button onClick={handleDeleteCV} className="text-slate-400 hover:text-red-500">
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => runAnalysis()}
+                  disabled={analyzing}
+                  className="flex items-center gap-1.5 rounded-lg border border-green-200 bg-white px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 disabled:opacity-50"
+                >
+                  {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  Analysera igen
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:border-red-200 hover:text-red-500"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
+
+            {/* Delete confirmation inline */}
+            {showDeleteConfirm && (
+              <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm font-medium text-red-800">Ta bort CV permanent?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-white"
+                  >
+                    Avbryt
+                  </button>
+                  <button
+                    onClick={handleDeleteCV}
+                    className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+                  >
+                    Ta bort
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {analyzing && (
+              <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                AI analyserar ditt CV...
+              </div>
+            )}
           </div>
         ) : (
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFileUpload(f) }}
-            className={`rounded-xl border-2 border-dashed p-10 text-center transition-colors ${dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200'}`}
-          >
-            <Upload className="mx-auto mb-3 h-10 w-10 text-slate-300" />
-            <p className="mb-2 font-medium text-slate-600">Dra och släpp ditt CV här</p>
-            <p className="mb-4 text-sm text-slate-400">PDF, DOCX eller TXT · Max 5 MB</p>
-            <div className="flex items-center justify-center gap-3">
-              <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Välj fil'}
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.doc,.txt"
-                  className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f) }}
-                />
-              </label>
+          <div className="space-y-3">
+            {/* Drag & drop zone */}
+            {!showPastePanel && (
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFileUpload(f) }}
+                className={`rounded-xl border-2 border-dashed p-10 text-center transition-colors ${dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}
+              >
+                <Upload className="mx-auto mb-3 h-10 w-10 text-slate-300" />
+                <p className="mb-1 font-medium text-slate-600">Dra och släpp ditt CV här</p>
+                <p className="mb-5 text-sm text-slate-400">PDF, DOCX eller TXT · Max 5 MB</p>
+                <label className="cursor-pointer rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                  {uploading ? <Loader2 className="inline h-4 w-4 animate-spin" /> : 'Välj fil'}
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,.doc,.txt"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f) }}
+                  />
+                </label>
+              </div>
+            )}
+
+            {/* Toggle paste panel */}
+            {!showPastePanel ? (
               <button
-                onClick={handlePasteCV}
-                className="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                onClick={() => setShowPastePanel(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 py-3 text-sm font-medium text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 transition-colors"
               >
                 <FileText className="h-4 w-4" />
-                Klistra in text
+                Klistra in CV som text istället
               </button>
-            </div>
-          </div>
-        )}
-        {analyzing && (
-          <div className="mt-3 flex items-center gap-2 text-sm text-blue-600">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            AI analyserar ditt CV...
+            ) : (
+              /* Inline paste panel */
+              <div className="rounded-xl border bg-slate-50 p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-blue-600" />
+                    <p className="text-sm font-semibold text-slate-800">Klistra in ditt CV</p>
+                  </div>
+                  <button
+                    onClick={() => { setShowPastePanel(false); setPasteText('') }}
+                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <textarea
+                  autoFocus
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  rows={10}
+                  placeholder="Klistra in hela ditt CV här — inkludera erfarenhet, utbildning, kompetenser och kontaktinfo för bästa AI-resultat..."
+                  className="w-full rounded-lg border bg-white px-4 py-3 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                />
+                <div className="mt-3 flex items-center justify-between">
+                  <p className="text-xs text-slate-400">{pasteText.length.toLocaleString()} tecken</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowPastePanel(false); setPasteText('') }}
+                      className="rounded-lg border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+                    >
+                      Avbryt
+                    </button>
+                    <button
+                      onClick={handlePasteSubmit}
+                      disabled={uploading || pasteText.trim().length < 50}
+                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      Spara & analysera
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {analyzing && (
+              <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                AI analyserar ditt CV...
+              </div>
+            )}
           </div>
         )}
       </div>
