@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Building2, Loader2, ExternalLink, Copy } from 'lucide-react'
 import { toast } from 'sonner'
+import { PageHero } from '@/components/ui/ModernShell'
 
 interface DiscoveredCompany {
   name: string
@@ -22,11 +23,31 @@ export default function CompaniesPage() {
   const [liaFocus, setLiaFocus] = useState(false)
   const [loading, setLoading] = useState(false)
   const [companies, setCompanies] = useState<DiscoveredCompany[]>([])
+  const [fallback, setFallback] = useState(false)
+  const [activeOnly, setActiveOnly] = useState(false)
+
+  useEffect(() => {
+    async function loadProfileDefaults() {
+      const res = await fetch('/api/profile')
+      if (!res.ok) return
+      const data = await res.json() as { profile?: { targetRoles?: string[]; city?: string | null; location?: string | null; liaEnabled?: boolean } | null }
+      const firstRole = data.profile?.targetRoles?.[0]
+
+      // Prefill from desired role so discovery starts from the user's actual target.
+      if (firstRole) setTargetRole((current) => current || firstRole)
+      setLocation((current) => current || data.profile?.city || data.profile?.location || 'Sverige')
+      setLiaFocus((current) => current || Boolean(data.profile?.liaEnabled))
+    }
+
+    loadProfileDefaults()
+  }, [])
 
   async function handleDiscover(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setCompanies([])
+    setFallback(false)
+    setActiveOnly(false)
     try {
       const res = await fetch('/api/ai/discover-companies', {
         method: 'POST',
@@ -36,7 +57,13 @@ export default function CompaniesPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setCompanies(data.companies)
-      toast.success(`Hittade ${data.companies.length} relevanta företag`)
+      setFallback(Boolean(data.fallback))
+      setActiveOnly(Boolean(data.activeOnly))
+      if (data.companies.length) {
+        toast.success(`Hittade ${data.companies.length} relevanta företag`)
+      } else {
+        toast.info(data.message ?? 'Inga företag hittades. Prova bredare plats eller roll.')
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Sökning misslyckades')
     } finally {
@@ -46,14 +73,20 @@ export default function CompaniesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <PageHero
+        eyebrow="Company node discovery"
+        title="Find companies connected to your CV graph"
+        description="Discover employers, LIA opportunities, and outreach angles using your role, location, and profile context."
+      />
+      <div className="hidden">
         <h1 className="text-2xl font-bold text-slate-900">Företagsupptäckt</h1>
         <p className="mt-1 text-slate-500">
           AI hittar relevanta företag baserat på ditt CV och mål — inklusive LIA-platser utan öppna annonser
         </p>
       </div>
 
-      <div className="rounded-xl border bg-white p-6">
+      <div className="rounded-xl border border-white/70 bg-white/80 p-6 shadow-sm backdrop-blur">
+        {/* Discovery filters define which company nodes the AI should expand. */}
         <form onSubmit={handleDiscover} className="flex flex-wrap gap-3">
           <input
             value={targetRole}
@@ -65,13 +98,16 @@ export default function CompaniesPage() {
           <input
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            placeholder="Stad"
+            placeholder="Sverige eller stad"
             className="w-36 rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
           />
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={liaFocus} onChange={(e) => setLiaFocus(e.target.checked)} className="rounded" />
-            LIA-fokus
+            Prioritera LIA
           </label>
+          <div className="flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+            {liaFocus ? 'Endast aktiva LIA/praktik/trainee' : 'Aktiva jobb + LIA/praktik/trainee'}
+          </div>
           <button type="submit" disabled={loading} className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Building2 className="h-4 w-4" />}
             Hitta företag
@@ -88,9 +124,20 @@ export default function CompaniesPage() {
 
       {companies.length > 0 && (
         <div className="space-y-4">
-          <p className="text-sm font-medium text-slate-500">{companies.length} företag hittade</p>
+          <p className="text-sm font-medium text-slate-500">
+            {companies.length} företag hittade
+            {fallback && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Jobbkällor utan AI-ranking</span>}
+          </p>
+          {activeOnly && (
+            <p className="text-xs font-semibold text-emerald-700">
+              {liaFocus
+                ? 'Endast foretag med aktiva LIA/praktik/trainee-annonser visas.'
+                : 'Foretag med aktiva jobbannonser eller LIA/praktik/trainee-mojligheter visas.'}
+            </p>
+          )}
           {companies.map((company, i) => (
-            <div key={i} className="rounded-xl border bg-white p-5">
+            <div key={i} className="rounded-xl border border-white/70 bg-white/80 p-5 shadow-sm backdrop-blur">
+              {/* Company cards include fit reasoning and ready-to-edit outreach copy. */}
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">

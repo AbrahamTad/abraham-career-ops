@@ -41,9 +41,12 @@ export default function Sidebar() {
   const pct = usage ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 20
 
   return (
-    <aside className="hidden w-60 flex-col border-r bg-white md:flex">
-      <div className="flex h-16 items-center gap-2 border-b px-4">
-        <BrainCircuit className="h-6 w-6 text-blue-600" />
+    <aside className="hidden w-64 flex-col border-r border-white/70 bg-white/75 shadow-xl shadow-slate-200/50 backdrop-blur md:flex">
+      {/* Sidebar uses a glass surface so navigation feels part of the AI workspace. */}
+      <div className="flex h-16 items-center gap-2 border-b border-slate-200/70 px-4">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-950 text-cyan-300">
+          <BrainCircuit className="h-5 w-5" />
+        </div>
         <span className="font-bold text-slate-900">CareerBridge AI</span>
       </div>
       <nav className="flex-1 overflow-y-auto py-4">
@@ -57,8 +60,8 @@ export default function Sidebar() {
                   className={cn(
                     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                     active
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      ? 'bg-slate-950 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-white hover:text-slate-950'
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -70,13 +73,13 @@ export default function Sidebar() {
         </ul>
       </nav>
       <div className="border-t p-4">
-        <div className="rounded-lg bg-blue-50 p-3">
-          <p className="text-xs font-semibold text-blue-700 capitalize">{usage?.plan ?? 'Gratis'} plan</p>
-          <p className="mt-0.5 text-xs text-blue-600">
+        <div className="rounded-lg border border-cyan-100 bg-gradient-to-br from-cyan-50 to-emerald-50 p-3">
+          <p className="text-xs font-semibold text-slate-800 capitalize">{usage?.plan ?? 'Gratis'} plan</p>
+          <p className="mt-0.5 text-xs text-slate-600">
             {usage ? `${usage.used}/${usage.limit} AI-analyser använda` : 'Laddar...'}
           </p>
-          <div className="mt-2 h-1.5 rounded-full bg-blue-100">
-            <div className="h-1.5 rounded-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
+          <div className="mt-2 h-1.5 rounded-full bg-white">
+            <div className="h-1.5 rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all" style={{ width: `${pct}%` }} />
           </div>
           <Link href="/pricing" className="mt-2 block text-xs font-medium text-blue-700 hover:underline">
             Uppgradera till Pro →

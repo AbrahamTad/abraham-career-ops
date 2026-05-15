@@ -23,7 +23,8 @@ export async function requireAuth(): Promise<AuthContext | NextResponse> {
       supabaseId: user.id,
       email: user.email!,
       name: (user.user_metadata?.name as string) || null,
-      subscription: { create: { plan: 'free', status: 'active' } },
+      // New local test accounts get a larger dev quota; production still uses schema defaults.
+      subscription: { create: { plan: 'free', status: 'active', aiCallsLimit: process.env.NODE_ENV === 'production' ? 50 : 500 } },
     },
     update: {},
     select: { id: true },

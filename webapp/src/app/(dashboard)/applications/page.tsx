@@ -6,6 +6,7 @@ import { Loader2, Plus, Trash2, ExternalLink } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/types'
 import type { AppStatusType } from '@/types'
+import { PageHero } from '@/components/ui/ModernShell'
 
 interface Application {
   id: string
@@ -97,6 +98,11 @@ export default function ApplicationsPage() {
 
   return (
     <div className="space-y-6">
+      <PageHero
+        eyebrow="Application pipeline"
+        title="Track every opportunity from saved to offer"
+        description="Keep applications, scores, statuses, and next actions visible as your AI search produces stronger matches."
+      />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Ansökningsspårare</h1>
@@ -113,7 +119,8 @@ export default function ApplicationsPage() {
 
       {/* Add form */}
       {showAdd && (
-        <div className="rounded-xl border bg-white p-5">
+        <div className="rounded-xl border border-white/70 bg-white/80 p-5 shadow-sm backdrop-blur">
+          {/* Manual entry preserves existing tracker functionality. */}
           <h2 className="mb-4 font-semibold text-slate-900">Lägg till ansökan manuellt</h2>
           <form onSubmit={handleAdd} className="flex flex-wrap gap-3">
             <input name="companyName" required placeholder="Företag" className="flex-1 min-w-32 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600" />
@@ -156,7 +163,8 @@ export default function ApplicationsPage() {
           <p className="text-slate-400">Inga ansökningar hittades</p>
         </div>
       ) : (
-        <div className="rounded-xl border bg-white overflow-hidden">
+        <div className="overflow-hidden rounded-xl border border-white/70 bg-white/80 shadow-sm backdrop-blur">
+          {/* Tracker table keeps status updates fast while retaining existing actions. */}
           <table className="w-full text-sm">
             <thead className="border-b bg-slate-50 text-xs font-medium uppercase tracking-wide text-slate-500">
               <tr>

@@ -203,6 +203,11 @@ ${body}
 
 function pdfText(text: string): string {
   return text
+    // Keep the hand-built PDF stream inside WinAnsi-friendly characters.
+    .replace(/[•]/g, '-')
+    .replace(/[–—]/g, '-')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .replace(/[^\x09\x0a\x0d\x20-\xff]/g, '?')
     .replace(/\\/g, '\\\\')
     .replace(/\(/g, '\\(')
@@ -284,7 +289,8 @@ function createPdf(markdown: string, title: string): Uint8Array {
 
   const objects: string[] = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    `<< /Type /Pages /Kids ${pages.map((_, index) => `${5 + index * 2} 0 R`).join(' ')} /Count ${pages.length} >>`,
+    // PDF page references must be wrapped in an array or Acrobat rejects the file.
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${5 + index * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
   ]
@@ -292,7 +298,8 @@ function createPdf(markdown: string, title: string): Uint8Array {
   pages.forEach((pageContent, index) => {
     const contentObjectNumber = 6 + index * 2
     objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`)
-    objects.push(`<< /Length ${pageContent.length} >>\nstream\n${pageContent}endstream`)
+    // Length must describe the exact PDF stream byte count.
+    objects.push(`<< /Length ${pageContent.length} >>\nstream\n${pageContent}\nendstream`)
   })
 
   let pdf = '%PDF-1.4\n'

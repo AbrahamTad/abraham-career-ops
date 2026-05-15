@@ -62,6 +62,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/auth/callback|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Keep auth callback/signout and webhooks out of middleware so redirects stay fast.
+    '/((?!_next/static|_next/image|favicon.ico|api/auth/callback|api/auth/signout|api/stripe/webhook|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

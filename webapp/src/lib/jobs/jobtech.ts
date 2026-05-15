@@ -13,6 +13,7 @@ export interface ExternalJob {
   salary?: string | null
   isRemote?: boolean
   isHybrid?: boolean
+  isLia?: boolean
   postedAt?: Date | null
   closingAt?: Date | null
 }
@@ -55,7 +56,9 @@ function compact(values: Array<string | null | undefined>): string[] {
 }
 
 function buildQuery(term: string, location?: string): string {
-  return compact([term, location]).join(' ')
+  const normalizedLocation = location?.trim().toLowerCase()
+  const area = normalizedLocation === 'sverige' || normalizedLocation === 'sweden' ? '' : location
+  return compact([term, area]).join(' ')
 }
 
 export async function searchJobTech(term: string, location = '', limit = 25): Promise<ExternalJob[]> {
@@ -86,6 +89,7 @@ export async function searchJobTech(term: string, location = '', limit = 25): Pr
       const address = job.workplace_address
       const companyName = job.employer?.name ?? job.employer?.workplace ?? 'Okänd arbetsgivare'
       const description = job.description?.text ?? job.headline ?? ''
+      const searchableText = `${job.headline ?? ''} ${description} ${job.employment_type?.label ?? ''}`
       const locationText = compact([address?.city, address?.municipality, address?.region])
         .filter((value, index, values) => values.indexOf(value) === index)
         .join(', ')
@@ -105,6 +109,7 @@ export async function searchJobTech(term: string, location = '', limit = 25): Pr
         salary: job.salary_description,
         isRemote: description.toLowerCase().includes('distans'),
         isHybrid: description.toLowerCase().includes('hybrid'),
+        isLia: /\b(lia|praktik|praktikplats|praktikant|internship|intern|trainee|traineeprogram|apprentice|apprenticeship|lärling|lärlingsplats|larling|apl|examensarbete)\b/i.test(searchableText),
         postedAt: parseDate(job.publication_date),
         closingAt: parseDate(job.application_deadline ?? job.last_publication_date),
       }

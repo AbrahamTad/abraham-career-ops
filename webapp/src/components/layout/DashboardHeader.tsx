@@ -15,10 +15,11 @@ export default function DashboardHeader({ user }: { user: User }) {
 
   async function handleSignOut() {
     const supabase = createClient()
-    await supabase.auth.signOut()
+    // Clear browser auth state in the background; the server route clears cookies and redirects.
+    void supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
     toast.success('Du har loggats ut')
-    router.push('/')
-    router.refresh()
+    router.replace('/api/auth/signout')
+    window.location.href = '/api/auth/signout'
   }
 
   return (

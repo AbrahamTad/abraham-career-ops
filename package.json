@@ -1,5 +1,5 @@
 {
-  "name": "career-ops",
+  "name": "careerbridge",
   "version": "1.6.0",
   "description": "AI-powered job search pipeline built on Claude Code",
   "scripts": {
@@ -28,13 +28,8 @@
   "homepage": "https://santifer.io",
   "repository": {
     "type": "git",
-    "url": "https://github.com/santifer/career-ops"
-  },
-  "license": "MIT",
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "dotenv": "^16.4.5",
-    "js-yaml": "^4.1.1",
+    "url": "https://github.com/santifer/careerbridge"
+  },node -e "let fs=require('fs');let p=require('./package.json');p.name='careerbridge';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
     "playwright": "^1.58.1"
   }
 }

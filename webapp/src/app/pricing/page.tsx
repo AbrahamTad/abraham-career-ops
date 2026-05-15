@@ -1,5 +1,7 @@
 import Link from 'next/link'
 import { Check, BrainCircuit } from 'lucide-react'
+import { Toaster } from 'sonner'
+import CheckoutButton from '@/components/ui/CheckoutButton'
 
 const plans = [
   {
@@ -59,6 +61,7 @@ const plans = [
 export default function PricingPage() {
   return (
     <div className="min-h-screen bg-white">
+      <Toaster richColors />
       <header className="border-b px-4 py-4">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
@@ -109,16 +112,19 @@ export default function PricingPage() {
                   </li>
                 ))}
               </ul>
-              <Link
-                href={plan.href}
-                className={`block w-full rounded-lg py-3 text-center font-semibold transition-colors ${
-                  plan.highlighted
-                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                    : 'border border-slate-200 text-slate-900 hover:bg-slate-50'
-                }`}
-              >
-                {plan.cta}
-              </Link>
+              {plan.highlighted ? (
+                <CheckoutButton
+                  label={plan.cta}
+                  className="block w-full rounded-lg bg-blue-600 py-3 text-center font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+                />
+              ) : (
+                <Link
+                  href={plan.href}
+                  className="block w-full rounded-lg border border-slate-200 py-3 text-center font-semibold text-slate-900 transition-colors hover:bg-slate-50"
+                >
+                  {plan.cta}
+                </Link>
+              )}
             </div>
           ))}
         </div>

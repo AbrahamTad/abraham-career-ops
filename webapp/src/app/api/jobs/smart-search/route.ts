@@ -1,10 +1,61 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
+
+export async function GET(request: NextRequest) {
+  const auth = await requireAuth()
+  if (isAuthResponse(auth)) return auth
+
+  const { searchParams } = new URL(request.url)
+  const taskId = searchParams.get('taskId')
+
+  const task = taskId
+    ? await prisma.searchTask.findFirst({
+        where: { id: taskId, userId: auth.dbUserId },
+      })
+    : await prisma.searchTask.findFirst({
+        where: {
+          userId: auth.dbUserId,
+          type: 'JOB_SCAN',
+          status: { in: ['RUNNING', 'COMPLETED'] },
+        },
+        orderBy: { updatedAt: 'desc' },
+      })
+
+  if (!task) {
+    return NextResponse.json({ progress: 0, currentStep: 'Starting…', status: 'PENDING' })
+  }
+
+  return NextResponse.json({
+    taskId: task.id,
+    status: task.status,
+    progress: task.progress,
+    currentStep: task.currentStep,
+    sourcesScanned: task.sourcesScanned,
+    jobsFound: task.jobsFound,
+    companiesFound: task.companiesFound,
+    matchesFound: task.matchesFound,
+  })
+}
+
 import { generateJobSearchQueries, getFriendlyAIError, matchJobToCv } from '@/lib/ai/service'
-import { searchJobTech, uniqueExternalJobs } from '@/lib/jobs/jobtech'
+import { searchJobTech, uniqueExternalJobs, type ExternalJob } from '@/lib/jobs/jobtech'
 import { persistExternalJobs } from '@/lib/jobs/persist'
+import { verifyActiveJobIds } from '@/lib/jobs/liveness'
+import { hasReachedAiLimit } from '@/lib/subscription'
+
+const CACHE_MINUTES = 20
+const MAX_IMPORTED_JOBS = 36
+const MAX_AUTO_MATCHES = 8
+
+type SearchData = {
+  titles: string[]
+  skills: string[]
+  level: string
+  summary: string
+}
 
 function cleanJson(text: string) {
   return text.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim()
@@ -21,7 +72,50 @@ function uniqueTerms(terms: string[]) {
     unique.push(term)
   }
 
-  return unique.slice(0, 4)
+  return unique.slice(0, 5)
+}
+
+function stringsFromJson(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function searchDataFromParsedCv(parsedData: Prisma.JsonValue | null) {
+  if (!parsedData || typeof parsedData !== 'object' || Array.isArray(parsedData)) return null
+  const data = parsedData as Record<string, unknown>
+  const titles = stringsFromJson(data.targetRoles)
+  const skills = stringsFromJson(data.skills)
+  const summary = typeof data.summary === 'string' ? data.summary : 'CV profile graph reused from your latest analysis.'
+
+  if (!titles.length && !skills.length) return null
+  return {
+    titles,
+    skills,
+    level: typeof data.seniorityLevel === 'string' ? data.seniorityLevel : 'junior',
+    summary,
+  }
+}
+
+async function updateTask(taskId: string, data: Prisma.SearchTaskUpdateInput) {
+  try {
+    await prisma.searchTask.update({ where: { id: taskId }, data })
+  } catch {
+    // Task telemetry should never break the user-facing search.
+  }
+}
+
+async function findCachedTask(userId: string, queryText: string, location: string) {
+  const since = new Date(Date.now() - CACHE_MINUTES * 60 * 1000)
+  return prisma.searchTask.findFirst({
+    where: {
+      userId,
+      type: 'JOB_SCAN',
+      status: 'COMPLETED',
+      queryText,
+      location,
+      updatedAt: { gte: since },
+    },
+    orderBy: { updatedAt: 'desc' },
+  })
 }
 
 export async function POST(request: NextRequest) {
@@ -30,14 +124,17 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => ({}))
   const query = typeof body.query === 'string' ? body.query.trim() : ''
+  const liaOnly = body.liaOnly === true
+  const demoRequested = body.demoMode === true
+  const useCache = body.useCache !== false
   let location = typeof body.location === 'string' ? body.location.trim() : ''
 
   const cv = await prisma.cV.findFirst({ where: { userId: auth.dbUserId, isActive: true } })
-  if (!cv) return NextResponse.json({ error: 'Inget CV hittat. Ladda upp ett CV först.' }, { status: 400 })
+  if (!cv) return NextResponse.json({ error: 'No CV found. Upload a CV first.' }, { status: 400 })
 
   const subscription = await prisma.subscription.findUnique({ where: { userId: auth.dbUserId } })
-  if (subscription && subscription.aiCallsThisMonth >= subscription.aiCallsLimit) {
-    return NextResponse.json({ error: 'AI-gräns nådd för månaden.' }, { status: 429 })
+  if (hasReachedAiLimit(subscription)) {
+    return NextResponse.json({ error: 'Monthly AI limit reached.' }, { status: 429 })
   }
 
   if (!location) {
@@ -48,67 +145,34 @@ export async function POST(request: NextRequest) {
     location = profile?.city || profile?.location || ''
   }
 
-  let searchData: { titles: string[]; skills: string[]; level: string; summary: string }
-  try {
-    const raw = await generateJobSearchQueries(cv.rawText)
-    searchData = JSON.parse(cleanJson(raw))
-  } catch (err: unknown) {
-    const { message, status } = getFriendlyAIError(err, 'CV-analys misslyckades')
-    return NextResponse.json({ error: `CV-analys misslyckades: ${message}` }, { status })
+  const queryText = query || 'cv-driven-search'
+  const cachedTask = useCache ? await findCachedTask(auth.dbUserId, queryText, location) : null
+  if (cachedTask?.results && typeof cachedTask.results === 'object' && !Array.isArray(cachedTask.results)) {
+    return NextResponse.json({ ...(cachedTask.results as Record<string, unknown>), cached: true, taskId: cachedTask.id })
   }
 
-  if (subscription) {
-    await prisma.subscription.update({
-      where: { userId: auth.dbUserId },
-      data: { aiCallsThisMonth: { increment: 1 } },
-    })
-  }
+  const searchTask = await prisma.searchTask.create({
+    data: {
+      userId: auth.dbUserId,
+      type: 'JOB_SCAN',
+      status: 'RUNNING',
+      query: { query, location, source: 'jobtech', mode: 'ai-graph-search' },
+      queryText,
+      location,
+      progress: 8,
+      currentStep: 'Reading your CV',
+      startedAt: new Date(),
+    },
+  })
 
-  const titleTerms = Array.isArray(searchData.titles) ? searchData.titles : []
-  const skillTerms = Array.isArray(searchData.skills) ? searchData.skills.slice(0, 3) : []
-  const searchTerms = uniqueTerms([query, ...titleTerms, ...skillTerms])
+  let searchData: SearchData | null = searchDataFromParsedCv(cv.parsedData)
+  let usedCvCache = Boolean(searchData)
 
-  const results = await Promise.allSettled(
-    searchTerms.map((term) => searchJobTech(term, location, 12))
-  )
-  const foundJobs = uniqueExternalJobs(results.flatMap((result) => result.status === 'fulfilled' ? result.value : []))
-  const externalJobs = foundJobs.slice(0, 30)
-  const { ids: jobIds, newCount } = await persistExternalJobs(externalJobs)
-
-  const toMatch = jobIds.slice(0, 2)
-  let matchedCount = 0
-
-  for (const jobId of toMatch) {
-    const alreadyMatched = await prisma.jobMatch.findUnique({
-      where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId: jobId } },
-    })
-    if (alreadyMatched) continue
-
-    const jobListing = await prisma.jobListing.findUnique({
-      where: { id: jobId },
-      include: { company: true },
-    })
-    if (!jobListing || !jobListing.description) continue
-
+  if (!searchData) {
     try {
-      const matchText = await matchJobToCv(cv.rawText, jobListing.description, jobListing.title)
-      const matchData = JSON.parse(cleanJson(matchText))
-
-      await prisma.jobMatch.create({
-        data: {
-          userId: auth.dbUserId,
-          jobListingId: jobId,
-          cvId: cv.id,
-          score: matchData.score,
-          tier: matchData.tier,
-          missingSkills: matchData.missingSkills ?? [],
-          strengths: matchData.strengths ?? [],
-          recommendations: matchData.recommendations ?? [],
-          aiSummary: matchData.aiSummary,
-          aiReasoning: matchData.aiReasoning,
-          rawAnalysis: matchData,
-        },
-      })
+      await updateTask(searchTask.id, { progress: 18, currentStep: 'Extracting skills and experience' })
+      const raw = await generateJobSearchQueries(cv.rawText)
+      searchData = JSON.parse(cleanJson(raw)) as SearchData
 
       if (subscription) {
         await prisma.subscription.update({
@@ -116,20 +180,169 @@ export async function POST(request: NextRequest) {
           data: { aiCallsThisMonth: { increment: 1 } },
         })
       }
-      matchedCount++
-    } catch {
-      // Matching failed for this job. Keep the imported listing so the user can still inspect it.
+    } catch (err: unknown) {
+      const { message } = getFriendlyAIError(err, 'CV analysis failed')
+      console.warn('Smart search CV analysis fallback', { message })
+      searchData = {
+        titles: query ? [query] : ['Frontend Developer', 'QA Automation', 'LIA'],
+        skills: ['React', 'JavaScript', 'Cypress'],
+        level: 'junior',
+        summary: 'Local profile graph created from available search inputs.',
+      }
     }
   }
 
-  return NextResponse.json({
+  if (!searchData) {
+    searchData = {
+      titles: query ? [query] : ['Frontend Developer', 'QA Automation', 'LIA'],
+      skills: ['React', 'JavaScript', 'Cypress'],
+      level: 'junior',
+      summary: 'Local profile graph created from available search inputs.',
+    }
+  }
+
+  await updateTask(searchTask.id, { progress: 32, currentStep: 'Building candidate profile graph' })
+
+  const titleTerms = Array.isArray(searchData.titles) ? searchData.titles : []
+  const skillTerms = Array.isArray(searchData.skills) ? searchData.skills.slice(0, 4) : []
+  const liaTerms = liaOnly ? ['LIA', 'praktik', 'praktikplats', 'praktikant', 'trainee', 'internship', 'lärling', 'apprentice', 'APL'] : []
+  const searchTerms = uniqueTerms([query, ...titleTerms, ...skillTerms, ...liaTerms])
+
+  let demoMode = false
+  let foundJobs: ExternalJob[] = []
+
+  try {
+    await updateTask(searchTask.id, { progress: 46, currentStep: 'Searching job sources', sourcesScanned: searchTerms.length })
+    const results = await Promise.allSettled(
+      searchTerms.map((term) => searchJobTech(term, location, 12))
+    )
+    foundJobs = uniqueExternalJobs(results.flatMap((result) => result.status === 'fulfilled' ? result.value : []))
+  } catch {
+    foundJobs = []
+  }
+
+  if (!foundJobs.length && demoRequested) {
+    // Demo mode is explicit only; normal search should never show fake postings.
+    demoMode = true
+    foundJobs = []
+  }
+
+  const companyCount = new Set(foundJobs.map((job) => job.companyName.toLowerCase())).size
+  await updateTask(searchTask.id, {
+    progress: 62,
+    currentStep: 'Discovering companies',
+    jobsFound: foundJobs.length,
+    companiesFound: companyCount,
+  })
+
+  const externalJobs = foundJobs.slice(0, MAX_IMPORTED_JOBS).map((job) => ({
+    ...job,
+    // When the user starts a LIA-focused search, keep imported results visible under the LIA filter.
+    isLia: liaOnly || job.isLia,
+  }))
+  const { ids: persistedJobIds, newCount } = await persistExternalJobs(externalJobs)
+  const jobIds = demoMode ? persistedJobIds : await verifyActiveJobIds(persistedJobIds)
+
+  await updateTask(searchTask.id, {
+    progress: 74,
+    currentStep: 'Connecting CV skills to job requirements',
+    jobsFound: jobIds.length,
+  })
+
+  const existingMatches = await prisma.jobMatch.findMany({
+    where: { userId: auth.dbUserId, jobListingId: { in: jobIds } },
+    select: { jobListingId: true },
+  })
+  const matchedIds = new Set(existingMatches.map((match) => match.jobListingId))
+  const toMatch = jobIds.filter((jobId) => !matchedIds.has(jobId)).slice(0, MAX_AUTO_MATCHES)
+  let matchedCount = existingMatches.length
+
+  await Promise.allSettled(
+    toMatch.map(async (jobId) => {
+      const jobListing = await prisma.jobListing.findUnique({
+        where: { id: jobId },
+        include: { company: true },
+      })
+      if (!jobListing?.description) return
+
+      try {
+        const matchText = await matchJobToCv(cv.rawText, jobListing.description, jobListing.title)
+        const matchData = JSON.parse(cleanJson(matchText))
+
+        await prisma.jobMatch.upsert({
+          where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId: jobId } },
+          create: {
+            userId: auth.dbUserId,
+            jobListingId: jobId,
+            cvId: cv.id,
+            score: matchData.score,
+            tier: matchData.tier,
+            missingSkills: matchData.missingSkills ?? [],
+            strengths: matchData.strengths ?? [],
+            recommendations: matchData.recommendations ?? [],
+            recommendation: matchData.recommendation,
+            cvImprovement: matchData.cvImprovement,
+            coverLetterAngle: matchData.coverLetterAngle,
+            aiSummary: matchData.aiSummary,
+            aiReasoning: matchData.aiReasoning,
+            rawAnalysis: matchData,
+          },
+          update: {
+            cvId: cv.id,
+            score: matchData.score,
+            tier: matchData.tier,
+            missingSkills: matchData.missingSkills ?? [],
+            strengths: matchData.strengths ?? [],
+            recommendations: matchData.recommendations ?? [],
+            recommendation: matchData.recommendation,
+            cvImprovement: matchData.cvImprovement,
+            coverLetterAngle: matchData.coverLetterAngle,
+            aiSummary: matchData.aiSummary,
+            aiReasoning: matchData.aiReasoning,
+            rawAnalysis: matchData,
+          },
+        })
+
+        matchedCount++
+      } catch {
+        // A failed AI match should still return the saved job as a partial result.
+      }
+    })
+  )
+
+  if (subscription && toMatch.length > 0) {
+    await prisma.subscription.update({
+      where: { userId: auth.dbUserId },
+      data: { aiCallsThisMonth: { increment: toMatch.length } },
+    })
+  }
+
+  const response = {
     newJobs: newCount,
     totalFound: foundJobs.length,
     imported: jobIds.length,
+    expiredSkipped: persistedJobIds.length - jobIds.length,
     autoMatched: matchedCount,
     searchedFor: searchTerms,
     location,
     candidateSummary: searchData.summary,
-    source: 'JobTech/Platsbanken',
+    source: demoMode ? 'Demo mode' : 'JobTech/Platsbanken',
+    demoMode,
+    usedCvCache,
+    taskId: searchTask.id,
+    partial: true,
+    canRunDeeper: foundJobs.length >= MAX_IMPORTED_JOBS,
+    jobIds,
+  }
+
+  await updateTask(searchTask.id, {
+    status: 'COMPLETED',
+    progress: 100,
+    currentStep: 'Preparing recommendations',
+    matchesFound: matchedCount,
+    completedAt: new Date(),
+    results: response as Prisma.InputJsonObject,
   })
+
+  return NextResponse.json(response)
 }

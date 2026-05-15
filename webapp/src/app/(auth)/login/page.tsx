@@ -5,7 +5,7 @@ import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
-import { Loader2 } from 'lucide-react'
+import { Loader2, MailCheck } from 'lucide-react'
 
 function LoginForm() {
   const router = useRouter()
@@ -16,21 +16,44 @@ function LoginForm() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null)
+  const [resendLoading, setResendLoading] = useState(false)
 
   const supabase = createClient()
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
+    setUnconfirmedEmail(null)
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) throw error
+      if (error) {
+        if (error.message === 'Email not confirmed') {
+          setUnconfirmedEmail(email)
+          return
+        }
+        throw error
+      }
       router.push(redirectTo)
       router.refresh()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Inloggning misslyckades')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleResendConfirmation() {
+    if (!unconfirmedEmail) return
+    setResendLoading(true)
+    try {
+      const { error } = await supabase.auth.resend({ type: 'signup', email: unconfirmedEmail })
+      if (error) throw error
+      toast.success('Bekräftelsemejl skickat! Kolla din inkorg.')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Kunde inte skicka mejl')
+    } finally {
+      setResendLoading(false)
     }
   }
 
@@ -111,6 +134,27 @@ function LoginForm() {
               className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
+          {unconfirmedEmail && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+              <div className="mb-2 flex items-center gap-2 font-medium text-amber-800">
+                <MailCheck className="h-4 w-4 shrink-0" />
+                E-postadressen är inte bekräftad
+              </div>
+              <p className="mb-3 text-amber-700">
+                Kolla din inkorg och klicka på länken vi skickade till{' '}
+                <span className="font-medium">{unconfirmedEmail}</span>.
+              </p>
+              <button
+                type="button"
+                onClick={handleResendConfirmation}
+                disabled={resendLoading}
+                className="flex items-center gap-1.5 text-amber-800 underline underline-offset-2 hover:text-amber-900 disabled:opacity-50"
+              >
+                {resendLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                Skicka om bekräftelsemejl
+              </button>
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}

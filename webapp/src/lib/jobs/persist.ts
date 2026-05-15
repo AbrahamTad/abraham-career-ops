@@ -12,7 +12,20 @@ export async function persistExternalJobs(jobs: ExternalJob[]) {
       select: { id: true },
     })
 
+    const isExpiredByDate = job.closingAt ? job.closingAt < new Date(new Date().setHours(0, 0, 0, 0)) : false
+
     if (existing) {
+      // Preserve LIA/remote flags when a later AI search adds stronger context.
+      await prisma.jobListing.update({
+        where: { id: existing.id },
+        data: {
+          isActive: isExpiredByDate ? false : undefined,
+          sourceUrl: job.sourceUrl === undefined ? undefined : job.sourceUrl,
+          isLia: job.isLia ? true : undefined,
+          isRemote: job.isRemote ? true : undefined,
+          isHybrid: job.isHybrid ? true : undefined,
+        },
+      })
       ids.push(existing.id)
       continue
     }
@@ -47,11 +60,12 @@ export async function persistExternalJobs(jobs: ExternalJob[]) {
         country: job.country ?? undefined,
         isRemote: job.isRemote ?? false,
         isHybrid: job.isHybrid ?? false,
+        isLia: job.isLia ?? false,
         jobType: job.jobType ?? undefined,
         sourceUrl: job.sourceUrl ?? undefined,
         sourceAts: job.sourceAts,
         externalId: job.externalId,
-        isActive: true,
+        isActive: !isExpiredByDate,
         postedAt: job.postedAt ?? undefined,
         closingAt: job.closingAt ?? undefined,
       },

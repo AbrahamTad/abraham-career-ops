@@ -10,11 +10,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!user) redirect('/login')
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-[linear-gradient(135deg,#f8fafc_0%,#eef8ff_45%,#f5fff8_100%)]">
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <DashboardHeader user={user} />
-        <main className="flex-1 overflow-y-auto p-6">
+        {/* Dashboard background gives every page a modern AI SaaS surface. */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">
           {children}
         </main>
       </div>

@@ -1,4 +1,4 @@
-import { getAIProviderKey, getSelectedAIProvider, type AIProvider } from '@/lib/server/env'
+import { getAIProviderKey, getConfiguredAIProvider, getSelectedAIProvider, type AIProvider } from '@/lib/server/env'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 const ANTHROPIC_MODEL = 'claude-sonnet-4-6'
@@ -48,6 +48,26 @@ function providerKey(provider: AIProvider): string {
   }
 }
 
+function canUseProvider(provider: AIProvider): boolean {
+  try {
+    getAIProviderKey(provider)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function otherProvider(provider: AIProvider): AIProvider {
+  return provider === 'anthropic' ? 'openai' : 'anthropic'
+}
+
+function shouldTryFallback(error: unknown): error is AIProviderError {
+  if (!(error instanceof AIProviderError) || error.code !== 'request_failed') return false
+
+  // Quota/rate-limit, network, and provider-side errors can use the backup provider.
+  return !error.status || error.status === 429 || error.status >= 500
+}
+
 function safeLogAIError(error: AIProviderError) {
   console.error('AI provider request failed', {
     provider: error.provider,
@@ -74,10 +94,28 @@ export function getFriendlyAIError(error: unknown, fallback = 'AI request failed
     }
   }
 
+  if (!error.status) {
+    return {
+      message: `Could not reach ${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'}. Check your internet connection, firewall, or provider status.`,
+      status: 502,
+    }
+  }
+
+  if (error.status === 429) {
+    return {
+      message: `${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'} quota or rate limit reached. Check billing, credits, or rate limits.`,
+      status: 429,
+    }
+  }
+
   return {
     message: `${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'} request failed. Please try again.`,
     status: error.status && error.status >= 400 && error.status < 500 ? error.status : 502,
   }
+}
+
+export function canUseLocalAIFallback(error: unknown) {
+  return shouldTryFallback(error)
 }
 
 async function parseError(response: Response): Promise<string> {
@@ -95,20 +133,30 @@ async function parseError(response: Response): Promise<string> {
 async function requestAnthropic({ system, user, maxTokens }: CompletionRequest): Promise<string> {
   const provider = 'anthropic'
   const apiKey = providerKey(provider)
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: user }],
-    }),
-  })
+  let response: Response
+
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: 'user', content: user }],
+      }),
+    })
+  } catch (error) {
+    throw new AIProviderError(
+      'request_failed',
+      provider,
+      error instanceof Error ? error.message : 'Anthropic request could not be sent.'
+    )
+  }
 
   if (!response.ok) {
     const message = await parseError(response)
@@ -127,21 +175,31 @@ async function requestAnthropic({ system, user, maxTokens }: CompletionRequest):
 async function requestOpenAI({ system, user, maxTokens }: CompletionRequest): Promise<string> {
   const provider = 'openai'
   const apiKey = providerKey(provider)
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      max_tokens: maxTokens,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-    }),
-  })
+  let response: Response
+
+  try {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    })
+  } catch (error) {
+    throw new AIProviderError(
+      'request_failed',
+      provider,
+      error instanceof Error ? error.message : 'OpenAI request could not be sent.'
+    )
+  }
 
   if (!response.ok) {
     const message = await parseError(response)
@@ -158,8 +216,33 @@ async function requestOpenAI({ system, user, maxTokens }: CompletionRequest): Pr
 }
 
 async function complete(request: CompletionRequest): Promise<string> {
-  const provider = selectedProvider()
-  return provider === 'anthropic' ? requestAnthropic(request) : requestOpenAI(request)
+  const preferredProvider = selectedProvider()
+  const fallbackProvider = otherProvider(preferredProvider)
+  const providers = [
+    preferredProvider,
+    ...(canUseProvider(fallbackProvider) ? [fallbackProvider] : []),
+  ]
+
+  let lastError: unknown
+  for (const provider of providers) {
+    try {
+      // Await here so provider quota/network errors are caught and can fall back cleanly.
+      return await (provider === 'anthropic' ? requestAnthropic(request) : requestOpenAI(request))
+    } catch (error) {
+      lastError = error
+      const canRetryWithNextProvider = provider !== providers[providers.length - 1] && shouldTryFallback(error)
+
+      if (!canRetryWithNextProvider) break
+
+      console.warn('AI provider failed; trying fallback provider', {
+        provider,
+        fallbackProvider: providers[providers.indexOf(provider) + 1],
+        status: error instanceof AIProviderError ? error.status : undefined,
+      })
+    }
+  }
+
+  throw lastError
 }
 
 export async function analyzeCV(cvText: string): Promise<string> {
@@ -188,6 +271,7 @@ export async function matchJobToCv(cvText: string, jobDescription: string, jobTi
     maxTokens: 2048,
     system: `You are an expert career coach and recruiter. Evaluate how well a candidate's CV matches a job description.
 Use clear, natural language. Be specific and practical, not generic or robotic.
+Reason across skills, real experience, projects, education, LIA/internship dates, location fit, remote/on-site preference, language requirements, and junior/student suitability.
 Return ONLY a JSON object with:
 {
   "score": 0.0-5.0,
@@ -195,6 +279,9 @@ Return ONLY a JSON object with:
   "strengths": ["list of matching strengths"],
   "missingSkills": ["skills the candidate lacks"],
   "recommendations": ["specific human-readable suggestions to improve the application"],
+  "recommendation": "short final recommendation for whether to apply",
+  "cvImprovement": "one concrete way to improve the CV for this job",
+  "coverLetterAngle": "suggested cover letter angle grounded in the CV",
   "aiSummary": "2-3 natural sentences explaining the match in plain language",
   "aiReasoning": "one grounded paragraph with concrete evidence from the CV and job ad"
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import { Upload, FileText, Loader2, CheckCircle, Trash2, X, Sparkles } from 'lucide-react'
+import { PageHero } from '@/components/ui/ModernShell'
 
 export default function ProfilePage() {
   const [cv, setCv] = useState<{ id: string; fileName?: string | null; rawText: string; createdAt: string } | null>(null)
@@ -172,14 +173,20 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="space-y-8 max-w-3xl">
-      <div>
+    <div className="max-w-5xl space-y-8">
+      <PageHero
+        eyebrow="CV understanding"
+        title="Profile graph and CV intelligence"
+        description="Keep your CV, skills, LIA dates, and preferences ready so AI search can reuse the latest analysis instead of starting over."
+      />
+      <div className="hidden">
         <h1 className="text-2xl font-bold text-slate-900">CV & Profil</h1>
         <p className="mt-1 text-slate-500">Hantera ditt CV och profilinformation</p>
       </div>
 
       {/* CV Section */}
-      <div className="rounded-xl border bg-white p-6">
+      <div className="rounded-xl border border-white/70 bg-white/80 p-6 shadow-sm backdrop-blur">
+        {/* CV card exposes analysis state and keeps re-analysis one click away. */}
         <h2 className="mb-4 text-lg font-semibold text-slate-900">Ditt CV</h2>
 
         {cv ? (
@@ -330,7 +337,8 @@ export default function ProfilePage() {
       </div>
 
       {/* Profile Form */}
-      <div className="rounded-xl border bg-white p-6">
+      <div className="rounded-xl border border-white/70 bg-white/80 p-6 shadow-sm backdrop-blur">
+        {/* Profile fields feed the matching model with location, LIA, and skill context. */}
         <h2 className="mb-6 text-lg font-semibold text-slate-900">Profilinformation</h2>
         <form onSubmit={handleSaveProfile} className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">

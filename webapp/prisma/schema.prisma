@@ -219,6 +219,9 @@ model JobMatch {
   missingSkills   String[]
   strengths       String[]
   recommendations String[]
+  recommendation  String? @db.Text
+  cvImprovement   String? @db.Text
+  coverLetterAngle String? @db.Text
   aiSummary       String? @db.Text
   aiReasoning     String? @db.Text
   rawAnalysis     Json?
@@ -316,7 +319,15 @@ model SearchTask {
   type    SearchType
   status  TaskStatus @default(PENDING)
   query   Json
+  queryText String?
+  location  String?
   results Json?
+  progress       Int    @default(0)
+  currentStep    String?
+  sourcesScanned Int    @default(0)
+  jobsFound      Int    @default(0)
+  companiesFound Int    @default(0)
+  matchesFound   Int    @default(0)
 
   startedAt   DateTime?
   completedAt DateTime?

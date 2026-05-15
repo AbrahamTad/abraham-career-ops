@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
+import { getEffectiveAiLimit } from '@/lib/subscription'
 
 export async function GET() {
   const auth = await requireAuth()
@@ -12,8 +13,8 @@ export async function GET() {
   })
 
   if (!subscription) {
-    return NextResponse.json({ plan: 'free', status: 'active', aiCallsThisMonth: 0, aiCallsLimit: 50 })
+    return NextResponse.json({ plan: 'free', status: 'active', aiCallsThisMonth: 0, aiCallsLimit: getEffectiveAiLimit(null) })
   }
 
-  return NextResponse.json(subscription)
+  return NextResponse.json({ ...subscription, aiCallsLimit: getEffectiveAiLimit(subscription) })
 }

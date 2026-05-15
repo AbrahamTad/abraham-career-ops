@@ -1,11 +1,11 @@
 import Link from 'next/link'
-import { ArrowRight, BrainCircuit, FileText, Search, Target, TrendingUp, Users } from 'lucide-react'
+import { ArrowRight, BrainCircuit, FileText, Network, Search, Target, TrendingUp, Users } from 'lucide-react'
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-[linear-gradient(135deg,#f8fafc_0%,#eef8ff_45%,#f4fff8_100%)]">
       {/* Nav */}
-      <header className="sticky top-0 z-50 border-b bg-white/90 backdrop-blur">
+      <header className="sticky top-0 z-50 border-b border-white/70 bg-white/75 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-2">
             <BrainCircuit className="h-6 w-6 text-blue-600" />
@@ -61,6 +61,20 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-4 text-sm text-slate-400">Inget kreditkort krävs · Gratis att testa</p>
+        <div className="mx-auto mt-12 max-w-4xl rounded-2xl border border-white/70 bg-slate-950 p-5 text-left shadow-2xl shadow-sky-100">
+          {/* Product preview makes the AI graph-search concept visible before sign-up. */}
+          <div className="mb-4 flex items-center justify-between text-sm text-cyan-100">
+            <span className="inline-flex items-center gap-2"><Network className="h-4 w-4" /> Live AI graph</span>
+            <span className="rounded-full bg-emerald-400 px-2 py-0.5 text-xs font-bold text-slate-950">92% match</span>
+          </div>
+          <div className="grid grid-cols-3 gap-3 md:grid-cols-9">
+            {['CV', 'React', 'Cypress', 'Frontend', 'LIA', 'Goteborg', 'Remote', 'Company', 'Job'].map((node) => (
+              <div key={node} className="rounded-lg border border-white/10 bg-white/10 p-3 text-center text-xs font-semibold text-white">
+                {node}
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {/* Stats */}

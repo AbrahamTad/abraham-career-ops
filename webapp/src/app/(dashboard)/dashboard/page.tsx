@@ -5,6 +5,7 @@ import { ArrowRight, BrainCircuit, ClipboardList, Search, TrendingUp } from 'luc
 import { formatDate } from '@/lib/utils'
 import { APP_STATUS_LABELS, APP_STATUS_COLORS } from '@/types'
 import type { AppStatusType } from '@/types'
+import { PageHero } from '@/components/ui/ModernShell'
 
 export const metadata = { title: 'Dashboard' }
 
@@ -44,8 +45,13 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      <PageHero
+        eyebrow="AI command center"
+        title={`Hej, ${name}!`}
+        description="Track your CV graph, strongest matches, application pipeline, and next actions from one modern dashboard."
+      />
       {/* Welcome */}
-      <div>
+      <div className="hidden">
         <h1 className="text-2xl font-bold text-slate-900">Hej, {name}! 👋</h1>
         <p className="mt-1 text-slate-500">Här är en översikt av din jobbsökning</p>
       </div>
@@ -81,7 +87,8 @@ export default async function DashboardPage() {
           { label: 'Erbjudanden', value: statsMap['OFFER'] ?? 0, icon: TrendingUp, color: 'green' },
           { label: 'AI-matchningar', value: recentMatches.length, icon: Search, color: 'orange' },
         ].map((stat) => (
-          <div key={stat.label} className="rounded-xl border bg-white p-5">
+          <div key={stat.label} className="rounded-xl border border-white/70 bg-white/80 p-5 shadow-sm backdrop-blur">
+            {/* Metric cards summarize the search pipeline at a glance. */}
             <p className="text-sm font-medium text-slate-500">{stat.label}</p>
             <p className="mt-2 text-3xl font-bold text-slate-900">{stat.value}</p>
           </div>

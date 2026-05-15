@@ -26,8 +26,10 @@ export default function SettingsPage() {
 
   async function handleSignOut() {
     const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/')
+    // Clear browser auth state in the background; the server route clears cookies and redirects.
+    void supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+    router.replace('/api/auth/signout')
+    window.location.href = '/api/auth/signout'
   }
 
   async function handleDeleteAccount() {
@@ -36,9 +38,10 @@ export default function SettingsPage() {
       const res = await fetch('/api/account', { method: 'DELETE' })
       if (!res.ok) throw new Error()
       const supabase = createClient()
-      await supabase.auth.signOut()
+      await supabase.auth.signOut({ scope: 'local' })
+      await fetch('/api/auth/signout', { method: 'POST' })
       toast.success('Konto borttaget')
-      router.push('/')
+      router.replace('/login')
     } catch {
       toast.error('Fel vid borttagning av konto')
     } finally {

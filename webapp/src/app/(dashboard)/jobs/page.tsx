@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Search, Filter, Loader2, ExternalLink, BookmarkPlus, BrainCircuit, Sparkles, FileText, Copy, X, MapPin, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatSalary } from '@/lib/utils'
+import AISearchProgress, { createAISearchStats } from '@/components/ai/AISearchProgress'
+import JobGraphVisualization from '@/components/ai/JobGraphVisualization'
+import { EmptyState, PageHero, PageSurface } from '@/components/ui/ModernShell'
 import {
   copyCleanText,
   downloadCleanText,
@@ -24,6 +27,7 @@ interface JobListing {
   salaryMax: number | null
   currency: string | null
   sourceUrl: string | null
+  sourceAts: string | null
   postedAt: string | null
   closingAt: string | null
   jobType: string | null
@@ -40,11 +44,18 @@ interface SmartSearchResult {
   candidateSummary: string
   source?: string
   location?: string
+  cached?: boolean
+  demoMode?: boolean
+  canRunDeeper?: boolean
+  jobIds?: string[]
 }
 
 interface ProfileLocation {
   city?: string | null
   location?: string | null
+  targetRoles?: string[]
+  skills?: string[]
+  liaEnabled?: boolean
 }
 
 interface AdaptedCVResult {
@@ -72,6 +83,12 @@ export default function JobsPage() {
   const [adaptingId, setAdaptingId] = useState<string | null>(null)
   const [adaptedCV, setAdaptedCV] = useState<AdaptedCVResult | null>(null)
   const [editingAdaptedCV, setEditingAdaptedCV] = useState(false)
+  const [searchProgress, setSearchProgress] = useState(0)
+  const [showCached, setShowCached] = useState(true)
+  const [graphSkills, setGraphSkills] = useState<string[]>([])
+  const [pollingStats, setPollingStats] = useState<import('@/components/ai/AISearchProgress').AISearchProgressStats | null>(null)
+  const activeSearch = useRef<AbortController | null>(null)
+  const autoSourceScanDone = useRef(false)
 
   const searchSteps = [
     'Läser CV och hittar relevanta roller',
@@ -81,9 +98,56 @@ export default function JobsPage() {
   ]
 
   useEffect(() => {
-    loadJobs()
     loadProfileLocation()
   }, [])
+
+  useEffect(() => {
+    if (!smartSearching) {
+      setPollingStats(null)
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setSearchProgress((value) => Math.min(94, value + 7))
+    }, 900)
+
+    // Poll the SearchTask record in the DB for real stats (runs concurrently with the POST request).
+    const pollTimer = window.setInterval(async () => {
+      try {
+        const res = await fetch('/api/jobs/smart-search')
+        if (!res.ok) return
+        const data = await res.json() as {
+          status?: string
+          progress?: number
+          currentStep?: string
+          sourcesScanned?: number
+          jobsFound?: number
+          companiesFound?: number
+          matchesFound?: number
+        }
+        if (!data.currentStep) return
+        setPollingStats({
+          progress: data.progress ?? 0,
+          currentStep: data.currentStep,
+          sourcesScanned: data.sourcesScanned ?? 0,
+          jobsFound: data.jobsFound ?? 0,
+          companiesFound: data.companiesFound ?? 0,
+          matchesFound: data.matchesFound ?? 0,
+          estimatedTime:
+            data.status === 'COMPLETED'
+              ? 'Almost ready'
+              : `${Math.max(3, Math.round((100 - (data.progress ?? 0)) / 5))} sec`,
+        })
+      } catch {
+        // Polling errors are non-fatal; simulated progress continues as fallback.
+      }
+    }, 1800)
+
+    return () => {
+      window.clearInterval(timer)
+      window.clearInterval(pollTimer)
+    }
+  }, [smartSearching])
 
   function createTimeoutSignal(ms: number) {
     const controller = new AbortController()
@@ -106,9 +170,38 @@ export default function JobsPage() {
           return 0
         })
         setJobs(sorted)
+        return sorted.length
       }
+      return 0
     } finally {
       setLoading(false)
+    }
+  }
+
+  function buildJobParams(values: { query?: string; location?: string; liaOnly?: boolean; remoteOnly?: boolean }) {
+    const params = new URLSearchParams()
+    if (values.query) params.set('q', values.query)
+    if (values.location) params.set('location', values.location)
+    if (values.liaOnly) params.set('lia', '1')
+    if (values.remoteOnly) params.set('remote', '1')
+    return params
+  }
+
+  async function autoScanIfEmpty(values: { query: string; location: string; liaOnly: boolean; remoteOnly: boolean }) {
+    if (autoSourceScanDone.current) return
+    autoSourceScanDone.current = true
+
+    // First visit should not stay empty; do a lightweight active source scan before asking for AI.
+    setScanning(true)
+    try {
+      await fetch('/api/jobs/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+      await loadJobs(buildJobParams(values))
+    } finally {
+      setScanning(false)
     }
   }
 
@@ -117,31 +210,63 @@ export default function JobsPage() {
     if (!res.ok) return
     const data = await res.json() as { profile?: ProfileLocation | null }
     const place = data.profile?.city || data.profile?.location || ''
+    const firstRole = data.profile?.targetRoles?.[0] || ''
+    const profileSkills = [
+      ...(data.profile?.targetRoles ?? []),
+      ...(data.profile?.skills ?? []),
+    ].filter(Boolean).slice(0, 8)
+    if (profileSkills.length) setGraphSkills(profileSkills)
+    const defaultValues = {
+      query: firstRole,
+      location: place || 'Sverige',
+      liaOnly: Boolean(data.profile?.liaEnabled),
+      remoteOnly: false,
+    }
+
     setProfileLocation(place)
-    setLocation((current) => current || place)
+    setQuery((current) => current || defaultValues.query)
+    setLiaOnly((current) => current || defaultValues.liaOnly)
+    // Default to all Sweden so AI search does not accidentally narrow to one suburb.
+    setLocation((current) => current || defaultValues.location)
+
+    const count = await loadJobs(buildJobParams(defaultValues))
+    if (count === 0 && defaultValues.query) {
+      await autoScanIfEmpty(defaultValues)
+    }
   }
 
-  async function handleSmartSearch() {
+  async function handleSmartSearch(options?: { deeper?: boolean }) {
     setSmartSearching(true)
     setLastSmartResult(null)
+    setSearchProgress(options?.deeper ? 18 : 8)
+    const controller = new AbortController()
+    activeSearch.current = controller
     toast.info('AI läser ditt CV och söker efter matchande jobb...')
-    const timeout = createTimeoutSignal(60000)
     try {
       const res = await fetch('/api/jobs/smart-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, location, liaOnly, remoteOnly }),
-        signal: timeout.signal,
+        body: JSON.stringify({ query, location, liaOnly, remoteOnly, useCache: showCached && !options?.deeper }),
+        signal: controller.signal,
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
+      setSearchProgress(100)
       setLastSmartResult(data)
+      if (Array.isArray(data.searchedFor) && data.searchedFor.length) {
+        setGraphSkills(data.searchedFor)
+      }
       toast.success(`Hittade ${data.totalFound} jobb, importerade ${data.imported ?? data.newJobs}`)
       const params = new URLSearchParams()
-      if (query) params.set('q', query)
-      if (location) params.set('location', location)
-      if (liaOnly) params.set('lia', '1')
-      if (remoteOnly) params.set('remote', '1')
+      // Load the exact imported jobs first so active filters do not hide fresh AI results.
+      if (Array.isArray(data.jobIds) && data.jobIds.length > 0) {
+        params.set('ids', data.jobIds.join(','))
+      } else {
+        if (query) params.set('q', query)
+        if (location) params.set('location', location)
+        if (liaOnly) params.set('lia', '1')
+        if (remoteOnly) params.set('remote', '1')
+      }
       await loadJobs(params)
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -150,9 +275,14 @@ export default function JobsPage() {
       }
       toast.error(err instanceof Error ? err.message : 'Smart sökning misslyckades')
     } finally {
-      timeout.clear()
       setSmartSearching(false)
+      activeSearch.current = null
     }
+  }
+
+  function cancelSmartSearch() {
+    activeSearch.current?.abort()
+    setSmartSearching(false)
   }
 
   async function handleSearch(e: React.FormEvent) {
@@ -309,8 +439,41 @@ export default function JobsPage() {
 
   return (
     <div className="space-y-6">
+      <PageHero
+        eyebrow="AI graph search"
+        title="Job search that shows its work"
+        description="Build a live candidate graph, scan sources in parallel, discover company nodes, and rank the best matches without hiding the AI process."
+      >
+        {/* Primary actions keep scan, cached search, and deeper search close together. */}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => handleSmartSearch()}
+            disabled={smartSearching || scanning}
+            className="flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"
+          >
+            {smartSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {smartSearching ? 'Searching...' : 'AI Search Job'}
+          </button>
+          <button
+            onClick={() => handleSmartSearch({ deeper: true })}
+            disabled={smartSearching || scanning}
+            className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-50"
+          >
+            Run deeper search
+          </button>
+          {smartSearching && (
+            <button onClick={cancelSmartSearch} className="rounded-lg border border-white/20 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10">
+              Cancel search
+            </button>
+          )}
+          <label className="flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm text-slate-200">
+            <input type="checkbox" checked={showCached} onChange={(e) => setShowCached(e.target.checked)} className="rounded" />
+            Show cached results
+          </label>
+        </div>
+      </PageHero>
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="hidden items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Jobbsökning</h1>
           <p className="mt-1 text-slate-500">AI söker och matchar jobb baserat på ditt CV</p>
@@ -325,7 +488,7 @@ export default function JobsPage() {
             Skanna
           </button>
           <button
-            onClick={handleSmartSearch}
+            onClick={() => handleSmartSearch()}
             disabled={smartSearching || scanning}
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
@@ -369,7 +532,7 @@ export default function JobsPage() {
             <input
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              placeholder="Stad"
+              placeholder="Sverige, stad eller remote"
               className="flex-1 text-sm outline-none"
             />
           </div>
@@ -388,6 +551,13 @@ export default function JobsPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
           <span>Område:</span>
+          <button
+            type="button"
+            onClick={() => setLocation('Sverige')}
+            className="rounded-full border px-2.5 py-1 font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600"
+          >
+            Hela Sverige
+          </button>
           {profileLocation && (
             <button
               type="button"
@@ -408,8 +578,42 @@ export default function JobsPage() {
               {place}
             </button>
           ))}
+          {['Angered', 'Stockholm', 'Malmo'].map((place) => (
+            <button
+              key={place}
+              type="button"
+              onClick={() => setLocation(place)}
+              className="rounded-full border px-2.5 py-1 font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600"
+            >
+              {place}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setRemoteOnly(true)}
+            className="rounded-full border px-2.5 py-1 font-medium text-slate-600 hover:border-blue-200 hover:text-blue-600"
+          >
+            Remote
+          </button>
+          {['LIA', 'Praktik', 'Trainee', 'Larling'].map((term) => (
+            <button
+              key={term}
+              type="button"
+              onClick={() => { setQuery(term); setLiaOnly(true) }}
+              className="rounded-full border border-emerald-200 px-2.5 py-1 font-medium text-emerald-700 hover:bg-emerald-50"
+            >
+              {term}
+            </button>
+          ))}
         </div>
       </form>
+
+      {smartSearching && (
+        <div className="grid gap-5 xl:grid-cols-[1fr_0.9fr]">
+          <AISearchProgress stats={pollingStats ?? createAISearchStats(searchProgress, jobs.length)} />
+          <JobGraphVisualization running matchesFound={lastSmartResult?.autoMatched ?? 0} skills={graphSkills} />
+        </div>
+      )}
 
       {adaptedCV && (
         <div className="rounded-xl border bg-white p-5 shadow-sm">
@@ -487,7 +691,7 @@ export default function JobsPage() {
       )}
 
       {/* Smart search loading state */}
-      {smartSearching && (
+      {false && smartSearching && (
         <div className="overflow-hidden rounded-xl border bg-white">
           <div className="relative border-b bg-blue-50 px-6 py-6">
             <div className="absolute inset-x-0 bottom-0 h-1 overflow-hidden bg-blue-100">
@@ -579,7 +783,7 @@ export default function JobsPage() {
           <p className="font-medium text-slate-600">Inga jobb hittade ännu</p>
           <p className="mt-1 text-sm text-slate-400">Klicka på "Sök med CV" — AI hittar jobb som passar dig</p>
           <button
-            onClick={handleSmartSearch}
+            onClick={() => handleSmartSearch()}
             disabled={smartSearching}
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
           >

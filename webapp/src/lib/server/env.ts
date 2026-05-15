@@ -42,6 +42,16 @@ function readEnv(name: string): string {
 }
 
 export function getSelectedAIProvider(): AIProvider {
+  const configured = getConfiguredAIProvider()
+
+  if (configured) {
+    return configured
+  }
+
+  return readEnv('ANTHROPIC_API_KEY') ? 'anthropic' : 'openai'
+}
+
+export function getConfiguredAIProvider(): AIProvider | undefined {
   const configured = readEnv('AI_PROVIDER').toLowerCase()
 
   if (configured === 'openai' || configured === 'anthropic') {
@@ -52,7 +62,7 @@ export function getSelectedAIProvider(): AIProvider {
     throw new Error('AI_PROVIDER must be either "openai" or "anthropic".')
   }
 
-  return readEnv('ANTHROPIC_API_KEY') ? 'anthropic' : 'openai'
+  return undefined
 }
 
 export function getAIProviderKey(provider: AIProvider): string {
