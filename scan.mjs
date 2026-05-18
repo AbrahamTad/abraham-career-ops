@@ -17,6 +17,8 @@
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
 import yaml from 'js-yaml';
+import { normalizeJobUrl, extractHttpUrls } from './src/utils/url.mjs';
+import { scanAllJobtech } from './src/services/pipeline/jobtech.mjs';
 const parseYaml = yaml.load;
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -75,33 +77,31 @@ function detectApi(company) {
 // ── API parsers ─────────────────────────────────────────────────────
 
 function parseGreenhouse(json, companyName) {
-  const jobs = json.jobs || [];
-  return jobs.map(j => ({
+  return (json.jobs || []).map(j => ({
     title: j.title || '',
-    url: j.absolute_url || '',
+    url: normalizeJobUrl(j.absolute_url || '') || '',
     company: companyName,
     location: j.location?.name || '',
-  }));
+  })).filter(j => j.url);
 }
 
 function parseAshby(json, companyName) {
-  const jobs = json.jobs || [];
-  return jobs.map(j => ({
+  return (json.jobs || []).map(j => ({
     title: j.title || '',
-    url: j.jobUrl || '',
+    url: normalizeJobUrl(j.jobUrl || '') || '',
     company: companyName,
     location: j.location || '',
-  }));
+  })).filter(j => j.url);
 }
 
 function parseLever(json, companyName) {
   if (!Array.isArray(json)) return [];
   return json.map(j => ({
     title: j.text || '',
-    url: j.hostedUrl || '',
+    url: normalizeJobUrl(j.hostedUrl || '') || '',
     company: companyName,
     location: j.categories?.location || '',
-  }));
+  })).filter(j => j.url);
 }
 
 const PARSERS = { greenhouse: parseGreenhouse, ashby: parseAshby, lever: parseLever };
@@ -139,29 +139,19 @@ function buildTitleFilter(titleFilter) {
 function loadSeenUrls() {
   const seen = new Set();
 
-  // scan-history.tsv
   if (existsSync(SCAN_HISTORY_PATH)) {
-    const lines = readFileSync(SCAN_HISTORY_PATH, 'utf-8').split('\n');
-    for (const line of lines.slice(1)) { // skip header
-      const url = line.split('\t')[0];
+    for (const line of readFileSync(SCAN_HISTORY_PATH, 'utf-8').split('\n').slice(1)) {
+      const url = normalizeJobUrl(line.split('\t')[0] || '');
       if (url) seen.add(url);
     }
   }
 
-  // pipeline.md — extract URLs from checkbox lines
   if (existsSync(PIPELINE_PATH)) {
-    const text = readFileSync(PIPELINE_PATH, 'utf-8');
-    for (const match of text.matchAll(/- \[[ x]\] (https?:\/\/\S+)/g)) {
-      seen.add(match[1]);
-    }
+    for (const url of extractHttpUrls(readFileSync(PIPELINE_PATH, 'utf-8'))) seen.add(url);
   }
 
-  // applications.md — extract URLs from report links and any inline URLs
   if (existsSync(APPLICATIONS_PATH)) {
-    const text = readFileSync(APPLICATIONS_PATH, 'utf-8');
-    for (const match of text.matchAll(/https?:\/\/[^\s|)]+/g)) {
-      seen.add(match[0]);
-    }
+    for (const url of extractHttpUrls(readFileSync(APPLICATIONS_PATH, 'utf-8'))) seen.add(url);
   }
 
   return seen;
@@ -252,6 +242,7 @@ async function parallelFetch(tasks, limit) {
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
+  const noJobtech = args.includes('--no-jobtech');
   const companyFlag = args.indexOf('--company');
   const filterCompany = companyFlag !== -1 ? args[companyFlag + 1]?.toLowerCase() : null;
 
@@ -322,32 +313,63 @@ async function main() {
 
   await parallelFetch(tasks, CONCURRENCY);
 
-  // 5. Write results
+  // 5. JobTech / Arbetsförmedlingen scan (unless --no-jobtech or --company filter active)
+  let jobtechFound = 0;
+  let jobtechErrors = [];
+  if (!noJobtech && !filterCompany) {
+    console.log('\nScanning Arbetsförmedlingen (JobTech API)...');
+    const { offers: jtOffers, errors: jtErrors } = await scanAllJobtech(25);
+    jobtechErrors = jtErrors;
+    jobtechFound = jtOffers.length;
+
+    for (const offer of jtOffers) {
+      if (!offer.url) continue;
+      const norm = normalizeJobUrl(offer.url);
+      if (!norm || seenUrls.has(norm)) { totalDupes++; continue; }
+      const key = `${offer.company.toLowerCase()}::${offer.title.toLowerCase()}`;
+      if (seenCompanyRoles.has(key)) { totalDupes++; continue; }
+      seenUrls.add(norm);
+      seenCompanyRoles.add(key);
+      newOffers.push({ ...offer, url: norm });
+    }
+  }
+
+  // 6. Write results
   if (!dryRun && newOffers.length > 0) {
     appendToPipeline(newOffers);
     appendToScanHistory(newOffers, date);
   }
 
-  // 6. Print summary
+  // 7. Print summary
   console.log(`\n${'━'.repeat(45)}`);
   console.log(`Portal Scan — ${date}`);
   console.log(`${'━'.repeat(45)}`);
   console.log(`Companies scanned:     ${targets.length}`);
+  if (!noJobtech && !filterCompany) {
+    console.log(`JobTech hits:          ${jobtechFound} raw results`);
+  }
   console.log(`Total jobs found:      ${totalFound}`);
   console.log(`Filtered by title:     ${totalFiltered} removed`);
   console.log(`Duplicates:            ${totalDupes} skipped`);
   console.log(`New offers added:      ${newOffers.length}`);
 
-  if (errors.length > 0) {
-    console.log(`\nErrors (${errors.length}):`);
-    for (const e of errors) {
+  const allErrors = [...errors, ...jobtechErrors.map(e => ({ company: `JobTech:${e.query}`, error: e.error }))];
+  if (allErrors.length > 0) {
+    console.log(`\nErrors (${allErrors.length}):`);
+    for (const e of allErrors) {
       console.log(`  ✗ ${e.company}: ${e.error}`);
     }
   }
 
   if (newOffers.length > 0) {
     console.log('\nNew offers:');
-    for (const o of newOffers) {
+    const liaOffers = newOffers.filter(o => o.isLIA);
+    const regularOffers = newOffers.filter(o => !o.isLIA);
+    if (liaOffers.length) {
+      console.log(`  [LIA/PRAKTIK — ${liaOffers.length} matches]`);
+      for (const o of liaOffers) console.log(`  ★ ${o.company} | ${o.title} | ${o.location || 'N/A'}`);
+    }
+    for (const o of regularOffers) {
       console.log(`  + ${o.company} | ${o.title} | ${o.location || 'N/A'}`);
     }
     if (dryRun) {
@@ -358,7 +380,7 @@ async function main() {
   }
 
   console.log(`\n→ Run /career-ops pipeline to evaluate new offers.`);
-  console.log('→ Share results and get help: https://discord.gg/8pRpHETxa4');
+  console.log('Tip: use --no-jobtech to skip Arbetsförmedlingen, --dry-run to preview.');
 }
 
 main().catch(err => {

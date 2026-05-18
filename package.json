@@ -2,6 +2,7 @@
   "name": "careerbridge",
   "version": "1.6.0",
   "description": "AI-powered job search pipeline built on Claude Code",
+  "type": "module",
   "scripts": {
     "doctor": "node doctor.mjs",
     "verify": "node verify-pipeline.mjs",
@@ -29,7 +30,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/santifer/careerbridge"
-  },node -e "let fs=require('fs');let p=require('./package.json');p.name='careerbridge';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.7",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
     "playwright": "^1.58.1"
   }
 }

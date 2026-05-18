@@ -30,18 +30,73 @@ export function extractWorkMode(text = '') {
   return 'Unspecified';
 }
 
-export function scoreJobAgainstProfile(jobText = '', profile = {}) {
+const LIA_PATTERN = /\b(lia|praktik|praktikplats|lärande i arbete|internship|trainee|yrkeshögskola|yh-?student)\b/i;
+const JUNIOR_PATTERN = /\b(junior|entry.?level|ny.?examinerad|nyexaminerad)\b/i;
+
+/**
+ * Extract tech keywords from a raw CV text string.
+ * Returns lowercase keywords that appear in the CV.
+ */
+export function extractCVKeywords(cvText = '') {
+  const text = cvText.toLowerCase();
+  const found = TECH_PATTERNS.filter((t) => text.includes(t.toLowerCase())).map((t) => t.toLowerCase());
+
+  // Also extract plain language keywords relevant to job matching
+  const extraPatterns = [
+    'cypress', 'playwright', 'jest', 'testing', 'wcag', 'accessibility',
+    'prisma', 'sqlite', 'express', 'flask', 'scikit', 'lightgbm', 'onnx',
+    'figma', 'jira', 'scrum', 'agile', 'git', 'github',
+  ];
+  for (const pat of extraPatterns) {
+    if (text.includes(pat) && !found.includes(pat)) found.push(pat);
+  }
+  return found;
+}
+
+/**
+ * Score a job against a profile (and optionally a raw CV text).
+ *
+ * @param {string} jobText - full job description text
+ * @param {object} profile - { preferredTech, preferredLocations, avoid }
+ * @param {string} [cvText] - raw CV text for deeper skill matching
+ */
+export function scoreJobAgainstProfile(jobText = '', profile = {}, cvText = '') {
   const text = jobText.toLowerCase();
-  const preferredTech = profile.preferredTech || ['react', 'typescript', 'javascript', 'cypress', 'playwright', 'ai'];
-  const preferredLocations = profile.preferredLocations || ['göteborg', 'goteborg', 'gothenburg', 'sweden', 'sverige', 'remote', 'hybrid'];
-  const avoid = profile.avoid || ['senior only', 'lead', 'manager', 'director', 'java ', '.net', 'php'];
 
-  const techHits = preferredTech.filter((keyword) => text.includes(keyword.toLowerCase()));
-  const locationHits = preferredLocations.filter((keyword) => text.includes(keyword.toLowerCase()));
-  const avoidHits = avoid.filter((keyword) => text.includes(keyword.toLowerCase()));
-  const internshipBoost = /\b(lia|praktik|internship|junior)\b/i.test(jobText) ? 0.5 : 0;
+  const preferredTech = profile.preferredTech
+    || ['react', 'typescript', 'javascript', 'cypress', 'playwright', 'ai'];
+  const preferredLocations = profile.preferredLocations
+    || ['göteborg', 'goteborg', 'gothenburg', 'sweden', 'sverige', 'remote', 'hybrid'];
+  const avoid = profile.avoid
+    || ['senior only', 'lead', 'manager', 'director', 'java ', '.net', 'php'];
 
-  const raw = 2.4 + Math.min(1.4, techHits.length * 0.28) + Math.min(0.7, locationHits.length * 0.2) + internshipBoost - avoidHits.length * 0.45;
+  const techHits = preferredTech.filter((k) => text.includes(k.toLowerCase()));
+  const locationHits = preferredLocations.filter((k) => text.includes(k.toLowerCase()));
+  const avoidHits = avoid.filter((k) => text.includes(k.toLowerCase()));
+
+  const isLIA = LIA_PATTERN.test(jobText);
+  const isJunior = JUNIOR_PATTERN.test(jobText);
+
+  // CV-based bonus: skills mentioned in CV that also appear in the job
+  let cvBonus = 0;
+  if (cvText) {
+    const cvKeywords = extractCVKeywords(cvText);
+    const cvHits = cvKeywords.filter((k) => text.includes(k));
+    cvBonus = Math.min(0.6, cvHits.length * 0.08);
+  }
+
+  // LIA is top priority — give it a strong signal, not a small hint
+  const liaBoost = isLIA ? 1.2 : 0;
+  const juniorBoost = isJunior && !isLIA ? 0.3 : 0;
+
+  const raw = 2.4
+    + Math.min(1.4, techHits.length * 0.28)
+    + Math.min(0.7, locationHits.length * 0.2)
+    + liaBoost
+    + juniorBoost
+    + cvBonus
+    - avoidHits.length * 0.45;
+
   const score = Math.max(1, Math.min(5, Number(raw.toFixed(1))));
 
   return {
@@ -49,18 +104,22 @@ export function scoreJobAgainstProfile(jobText = '', profile = {}) {
     techStack: extractTechStack(jobText),
     locations: extractSwedenLocation(jobText),
     workMode: extractWorkMode(jobText),
+    isLIA,
+    isJunior,
     positiveSignals: [...techHits, ...locationHits],
     riskSignals: avoidHits,
-    why: explainMatch({ score, techHits, locationHits, avoidHits, internshipBoost }),
+    why: explainMatch({ score, techHits, locationHits, avoidHits, isLIA, isJunior, cvBonus }),
   };
 }
 
-function explainMatch({ score, techHits, locationHits, avoidHits, internshipBoost }) {
+function explainMatch({ score, techHits, locationHits, avoidHits, isLIA, isJunior, cvBonus }) {
   const reasons = [];
-  if (techHits.length) reasons.push(`matches Abraham's stack through ${techHits.slice(0, 4).join(', ')}`);
-  if (locationHits.length) reasons.push(`fits the Sweden/Göteborg location target`);
-  if (internshipBoost) reasons.push('is junior/LIA-friendly');
+  if (isLIA) reasons.push('is a LIA/praktik/internship opportunity (top priority)');
+  else if (isJunior) reasons.push('targets junior/entry-level candidates');
+  if (techHits.length) reasons.push(`matches target tech stack: ${techHits.slice(0, 4).join(', ')}`);
+  if (locationHits.length) reasons.push('fits Sweden/Göteborg location target');
+  if (cvBonus > 0) reasons.push('aligns with skills found in the uploaded CV');
   if (avoidHits.length) reasons.push(`has risk signals: ${avoidHits.join(', ')}`);
   if (!reasons.length) reasons.push('has limited explicit overlap with the configured target profile');
-  return `Score ${score}/5 because it ${reasons.join('; ')}.`;
+  return `Score ${score}/5 — ${reasons.join('; ')}.`;
 }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { extractTextFromFile, validateCVText } from '@/lib/ai/cv-parser'
+import { extractTextFromFile, validateCVText, parseCVProfile } from '@/lib/ai/cv-parser'
 
 export async function GET() {
   const auth = await requireAuth()
@@ -14,7 +14,8 @@ export async function GET() {
     select: { id: true, fileName: true, rawText: true, createdAt: true, fileSize: true },
   })
 
-  return NextResponse.json({ cv })
+  const profile = cv?.rawText ? parseCVProfile(cv.rawText) : null
+  return NextResponse.json({ cv, profile })
 }
 
 export async function POST(request: NextRequest) {
@@ -51,6 +52,8 @@ export async function POST(request: NextRequest) {
   const validation = validateCVText(rawText)
   if (!validation.valid) return NextResponse.json({ error: validation.error }, { status: 400 })
 
+  const profile = parseCVProfile(rawText)
+
   // Deactivate old CVs
   await prisma.cV.updateMany({
     where: { userId: auth.dbUserId, isActive: true },
@@ -68,7 +71,7 @@ export async function POST(request: NextRequest) {
     },
   })
 
-  return NextResponse.json({ cv }, { status: 201 })
+  return NextResponse.json({ cv, profile }, { status: 201 })
 }
 
 export async function DELETE() {

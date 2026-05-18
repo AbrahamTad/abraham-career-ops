@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-05-15T20:46:58.473Z",
+  "timestamp": "2026-05-18T14:46:57.239Z",
   "processes": {
     "agentic_flow": 0,
     "mcp_server": 0,
@@ -7,7 +7,7 @@
   },
   "swarm": {
     "active": true,
-    "agent_count": 9,
+    "agent_count": 5,
     "coordination_active": true
   },
   "integration": {
