@@ -1,28 +1,10 @@
-import { getAIProviderKey, getConfiguredAIProvider, getSelectedAIProvider, type AIProvider } from '@/lib/server/env'
+import { getAIProviderKey, getSelectedAIProvider, type AIProvider } from '@/lib/server/env'
+import { gptSw3Provider } from './gptSw3Provider'
+import { openaiProvider } from './openaiProvider'
+import { AIProviderError, providerLabel, type CompletionRequest, parseProviderError } from './providers'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 const ANTHROPIC_MODEL = 'claude-sonnet-4-6'
-const OPENAI_MODEL = 'gpt-4o-mini'
-
-type AIErrorCode = 'missing_api_key' | 'invalid_api_key' | 'request_failed'
-
-interface CompletionRequest {
-  system: string
-  user: string
-  maxTokens: number
-}
-
-export class AIProviderError extends Error {
-  constructor(
-    public code: AIErrorCode,
-    public provider: AIProvider,
-    message: string,
-    public status?: number
-  ) {
-    super(message)
-    this.name = 'AIProviderError'
-  }
-}
 
 function selectedProvider(): AIProvider {
   try {
@@ -30,7 +12,7 @@ function selectedProvider(): AIProvider {
   } catch (error) {
     throw new AIProviderError(
       'request_failed',
-      'anthropic',
+      'openai',
       error instanceof Error ? error.message : 'Invalid AI provider configuration.'
     )
   }
@@ -40,10 +22,14 @@ function providerKey(provider: AIProvider): string {
   try {
     return getAIProviderKey(provider)
   } catch {
+    const envName =
+      provider === 'openai' ? 'OPENAI_API_KEY'
+      : provider === 'gpt-sw3' ? 'HUGGINGFACE_API_TOKEN'
+      : 'ANTHROPIC_API_KEY'
     throw new AIProviderError(
       'missing_api_key',
       provider,
-      `Missing ${provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'}.`
+      `Missing ${envName}.`
     )
   }
 }
@@ -57,12 +43,10 @@ function canUseProvider(provider: AIProvider): boolean {
   }
 }
 
-function otherProvider(provider: AIProvider): AIProvider {
-  return provider === 'anthropic' ? 'openai' : 'anthropic'
-}
-
 function shouldTryFallback(error: unknown): error is AIProviderError {
-  if (!(error instanceof AIProviderError) || error.code !== 'request_failed') return false
+  if (!(error instanceof AIProviderError)) return false
+  if (error.provider === 'gpt-sw3' && error.code === 'missing_api_key') return true
+  if (error.code !== 'request_failed') return false
 
   // Quota/rate-limit, network, and provider-side errors can use the backup provider.
   return !error.status || error.status === 429 || error.status >= 500
@@ -89,45 +73,33 @@ export function getFriendlyAIError(error: unknown, fallback = 'AI request failed
 
   if (error.code === 'invalid_api_key') {
     return {
-      message: `Invalid ${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'} API key. Check your environment variables.`,
+      message: `Invalid ${providerLabel(error.provider)} API key. Check your environment variables.`,
       status: 401,
     }
   }
 
   if (!error.status) {
     return {
-      message: `Could not reach ${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'}. Check your internet connection, firewall, or provider status.`,
+      message: `Could not reach ${providerLabel(error.provider)}. Check your internet connection, firewall, or provider status.`,
       status: 502,
     }
   }
 
   if (error.status === 429) {
     return {
-      message: `${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'} quota or rate limit reached. Check billing, credits, or rate limits.`,
+      message: `${providerLabel(error.provider)} quota or rate limit reached. Check billing, credits, or rate limits.`,
       status: 429,
     }
   }
 
   return {
-    message: `${error.provider === 'openai' ? 'OpenAI' : 'Anthropic'} request failed. Please try again.`,
+    message: `${providerLabel(error.provider)} request failed. Please try again.`,
     status: error.status && error.status >= 400 && error.status < 500 ? error.status : 502,
   }
 }
 
 export function canUseLocalAIFallback(error: unknown) {
   return shouldTryFallback(error)
-}
-
-async function parseError(response: Response): Promise<string> {
-  try {
-    const data = await response.json()
-    if (typeof data?.error?.message === 'string') return data.error.message
-    if (typeof data?.message === 'string') return data.message
-  } catch {
-    // Ignore malformed provider error bodies.
-  }
-
-  return response.statusText || 'Provider request failed'
 }
 
 async function requestAnthropic({ system, user, maxTokens }: CompletionRequest): Promise<string> {
@@ -159,7 +131,7 @@ async function requestAnthropic({ system, user, maxTokens }: CompletionRequest):
   }
 
   if (!response.ok) {
-    const message = await parseError(response)
+    const message = await parseProviderError(response)
     throw new AIProviderError(response.status === 401 ? 'invalid_api_key' : 'request_failed', provider, message, response.status)
   }
 
@@ -172,62 +144,24 @@ async function requestAnthropic({ system, user, maxTokens }: CompletionRequest):
   return text
 }
 
-async function requestOpenAI({ system, user, maxTokens }: CompletionRequest): Promise<string> {
-  const provider = 'openai'
-  const apiKey = providerKey(provider)
-  let response: Response
-
-  try {
-    response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        max_tokens: maxTokens,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
-    })
-  } catch (error) {
-    throw new AIProviderError(
-      'request_failed',
-      provider,
-      error instanceof Error ? error.message : 'OpenAI request could not be sent.'
-    )
-  }
-
-  if (!response.ok) {
-    const message = await parseError(response)
-    throw new AIProviderError(response.status === 401 ? 'invalid_api_key' : 'request_failed', provider, message, response.status)
-  }
-
-  const data = await response.json()
-  const text = data?.choices?.[0]?.message?.content
-  if (typeof text !== 'string') {
-    throw new AIProviderError('request_failed', provider, 'Unexpected OpenAI response format.')
-  }
-
-  return text
+function completeWithProvider(provider: AIProvider, request: CompletionRequest): Promise<string> {
+  if (provider === 'gpt-sw3') return gptSw3Provider(request)
+  if (provider === 'anthropic') return requestAnthropic(request)
+  return openaiProvider(request)
 }
 
 async function complete(request: CompletionRequest): Promise<string> {
   const preferredProvider = selectedProvider()
-  const fallbackProvider = otherProvider(preferredProvider)
   const providers = [
     preferredProvider,
-    ...(canUseProvider(fallbackProvider) ? [fallbackProvider] : []),
+    ...(preferredProvider !== 'openai' && canUseProvider('openai') ? ['openai' as const] : []),
   ]
 
   let lastError: unknown
   for (const provider of providers) {
     try {
       // Await here so provider quota/network errors are caught and can fall back cleanly.
-      return await (provider === 'anthropic' ? requestAnthropic(request) : requestOpenAI(request))
+      return await completeWithProvider(provider, request)
     } catch (error) {
       lastError = error
       const canRetryWithNextProvider = provider !== providers[providers.length - 1] && shouldTryFallback(error)
@@ -248,20 +182,23 @@ async function complete(request: CompletionRequest): Promise<string> {
 export async function analyzeCV(cvText: string): Promise<string> {
   return complete({
     maxTokens: 2048,
-    system: `You are an expert CV analyzer. Extract structured information from the CV text and return it as valid JSON.
-Return ONLY a JSON object with these fields:
+    system: `You are an expert CV analyzer covering all Swedish job market sectors: IT/tech, healthcare (vård/omsorg), education (utbildning), trades (yrkesarbeten), transport, and office/economy roles.
+Extract structured information and return ONLY valid JSON:
 {
-  "skills": [],
-  "tools": [],
-  "languages": [],
-  "spokenLanguages": [],
+  "skills": ["technical and professional skills"],
+  "tools": ["specific tools, software, systems used"],
+  "languages": ["programming/technical languages"],
+  "spokenLanguages": ["human languages: Swedish, English, Arabic, etc."],
   "education": [{"degree": "", "field": "", "institution": "", "year": ""}],
   "experience": [{"title": "", "company": "", "duration": "", "highlights": []}],
   "projects": [{"name": "", "description": "", "technologies": []}],
-  "summary": "",
-  "targetRoles": [],
-  "seniorityLevel": "junior|mid|senior"
-}`,
+  "summary": "2-sentence plain language summary",
+  "targetRoles": ["3-6 Swedish AND English job title keywords matching their background, e.g. 'Frontendutvecklare', 'Frontend Developer', 'QA Testare', 'Undersköterska'"],
+  "seniorityLevel": "junior|mid|senior",
+  "isLIAEligible": true/false,
+  "sectors": ["it", "healthcare", "education", "trades", "office"]
+}
+Include Swedish job titles in targetRoles — they are critical for Swedish job searches.`,
     user: `Analyze this CV and return structured JSON:\n\n${cvText}`,
   })
 }
@@ -271,16 +208,18 @@ export async function matchJobToCv(cvText: string, jobDescription: string, jobTi
     maxTokens: 2048,
     system: `You are an expert career coach and recruiter. Evaluate how well a candidate's CV matches a job description.
 Use clear, natural language. Be specific and practical, not generic or robotic.
-Reason across skills, real experience, projects, education, LIA/internship dates, location fit, remote/on-site preference, language requirements, and junior/student suitability.
+Reason across CV summary, education, real experience, projects, skills, tools, spoken languages, LIA/internship dates, job title, description, explicit requirements, location, remote/on-site preference, employer context, and junior/student suitability.
 Return ONLY a JSON object with:
 {
   "score": 0.0-5.0,
   "tier": "strong|medium|weak",
+  "reason": "one grounded paragraph explaining the match",
   "strengths": ["list of matching strengths"],
   "missingSkills": ["skills the candidate lacks"],
   "recommendations": ["specific human-readable suggestions to improve the application"],
   "recommendation": "short final recommendation for whether to apply",
   "cvImprovement": "one concrete way to improve the CV for this job",
+  "suggestedCvImprovements": ["2-4 concrete CV edits for this job"],
   "coverLetterAngle": "suggested cover letter angle grounded in the CV",
   "aiSummary": "2-3 natural sentences explaining the match in plain language",
   "aiReasoning": "one grounded paragraph with concrete evidence from the CV and job ad"
@@ -336,16 +275,19 @@ Rules:
 
 export async function generateJobSearchQueries(cvText: string): Promise<string> {
   return complete({
-    maxTokens: 512,
-    system: `You are a job search assistant. Read the candidate's CV and extract the most relevant job search information.
+    maxTokens: 768,
+    system: `You are a Swedish job search assistant. Read the candidate's CV and extract search queries for the Swedish job market.
 Return ONLY a JSON object:
 {
-  "titles": ["3-5 job title keywords to search, e.g. 'Frontend Developer', 'React Developer'"],
-  "skills": ["top 5 technical skills from the CV"],
+  "titles": ["6-8 job title search terms mixing Swedish and English, e.g. 'Frontendutvecklare', 'Frontend Developer', 'QA Testare', 'Undersköterska' — include Swedish titles as Platsbanken uses them"],
+  "skills": ["top 6 skills from the CV most relevant for job matching"],
   "level": "junior|mid|senior",
-  "summary": "one sentence describing the candidate's profile"
-}`,
-    user: `Extract job search info from this CV:\n\n${cvText}`,
+  "isLIAEligible": true/false,
+  "liaTerms": ["2-3 LIA/praktik search terms if the candidate is a YH student, e.g. 'LIA frontendutvecklare', 'praktik QA testare'"],
+  "summary": "one sentence describing the candidate"
+}
+IMPORTANT: Always include Swedish job title terms — these are essential for Swedish Platsbanken searches.`,
+    user: `Extract Swedish job search queries from this CV:\n\n${cvText}`,
   })
 }
 

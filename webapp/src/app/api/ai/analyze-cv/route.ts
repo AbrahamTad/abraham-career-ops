@@ -6,39 +6,50 @@ import { analyzeCV, getFriendlyAIError } from '@/lib/ai/service'
 import { hasReachedAiLimit } from '@/lib/subscription'
 
 const KNOWN_SKILLS = [
-  'JavaScript',
-  'TypeScript',
-  'React',
-  'Next.js',
-  'Node.js',
-  'Python',
-  'Java',
-  'C#',
-  'SQL',
-  'PostgreSQL',
-  'Prisma',
-  'Supabase',
-  'HTML',
-  'CSS',
-  'Tailwind',
-  'Git',
-  'GitHub',
-  'Docker',
-  'Azure',
-  'AWS',
-  'Figma',
-  'Excel',
-  'Power BI',
-  'Scrum',
+  // IT & Frontend
+  'JavaScript', 'TypeScript', 'React', 'Next.js', 'Node.js', 'Python',
+  'Java', 'C#', 'SQL', 'PostgreSQL', 'Prisma', 'Supabase',
+  'HTML', 'CSS', 'Tailwind', 'Styled Components', 'Vue', 'Angular',
+  'Git', 'GitHub', 'Docker', 'Azure', 'AWS', 'Figma', 'Jira',
+  'Excel', 'Power BI', 'Scrum', 'Agile',
+  // QA / Testing
+  'Cypress', 'Playwright', 'Jest', 'Testing Library', 'Selenium', 'Postman',
+  // AI / Data
+  'scikit-learn', 'LightGBM', 'ONNX', 'TensorFlow', 'PyTorch', 'pandas', 'numpy',
+  // Healthcare
+  'Vård', 'Omsorg', 'Omvårdnad', 'Hemtjänst', 'LSS', 'Journaldokumentation',
+  'Medicinering', 'Funktionsstöd', 'Boendestöd', 'Personlig assistans',
+  // Education
+  'Pedagogik', 'IUP', 'Läroplanen', 'Förskola', 'Grundskola',
+  // Trades / Industry
+  'El-installation', 'AutoCAD', 'PLC', 'Truckkort', 'Fordonsteknik',
 ]
 
 const ROLE_PATTERNS = [
-  { role: 'Frontend Developer', pattern: /\b(frontend|front-end|react|next\.?js)\b/i },
-  { role: 'Fullstack Developer', pattern: /\b(fullstack|full-stack|node\.?js|backend)\b/i },
-  { role: 'Backend Developer', pattern: /\b(backend|api|server|database|postgres|sql)\b/i },
-  { role: 'UX/UI Designer', pattern: /\b(ux|ui|figma|designer)\b/i },
-  { role: 'Data Analyst', pattern: /\b(data analyst|power bi|excel|analytics)\b/i },
-  { role: 'Software Developer', pattern: /\b(software developer|developer|programmer|utvecklare)\b/i },
+  // IT
+  { role: 'Frontend Developer', pattern: /\b(frontend|front-end|react|next\.?js|frontendutvecklare)\b/i },
+  { role: 'Fullstack Developer', pattern: /\b(fullstack|full-stack|fullstackutvecklare)\b/i },
+  { role: 'Backend Developer', pattern: /\b(backend|api|server|backendutvecklare)\b/i },
+  { role: 'QA Engineer', pattern: /\b(cypress|playwright|jest|qa|quality assurance|testare|test automation)\b/i },
+  { role: 'AI/ML Engineer', pattern: /\b(machine learning|ai engineer|scikit|lightgbm|onnx|tensorflow|pytorch)\b/i },
+  { role: 'DevOps Engineer', pattern: /\b(devops|docker|kubernetes|ci\/cd|cloud engineer)\b/i },
+  { role: 'UX/UI Designer', pattern: /\b(ux|ui|figma|designer|produktdesigner)\b/i },
+  { role: 'Data Analyst', pattern: /\b(data analyst|power bi|tableau|analytics|bi-analytiker)\b/i },
+  { role: 'IT Support', pattern: /\b(it support|servicedesk|helpdesk|it-tekniker)\b/i },
+  { role: 'Software Developer', pattern: /\b(software developer|systemutvecklare|mjukvaruutvecklare|programmer)\b/i },
+  // Healthcare
+  { role: 'Undersköterska', pattern: /\b(undersköterska|omvårdnad|vård och omsorg|hemtjänst)\b/i },
+  { role: 'Sjuksköterska', pattern: /\b(sjuksköterska|sjukvård|hälso.?och.?sjukvård)\b/i },
+  { role: 'Stödassistent', pattern: /\b(stödassistent|LSS|boendestöd|personlig assistent|funktionsstöd)\b/i },
+  { role: 'Socionom', pattern: /\b(socionom|socialt arbete|socialsekreterare|socialtjänst)\b/i },
+  // Education
+  { role: 'Lärare', pattern: /\b(lärare|grundskollärare|ämneslärare|gymnasielärare)\b/i },
+  { role: 'Förskollärare', pattern: /\b(förskollärare|förskola|barnomsorg)\b/i },
+  { role: 'Elevassistent', pattern: /\b(elevassistent|skolassistent|lärarassistent)\b/i },
+  // Trades
+  { role: 'Elektriker', pattern: /\b(elektriker|el-installation|elinstallatör)\b/i },
+  { role: 'Fordonstekniker', pattern: /\b(bilmekaniker|fordonstekniker|fordon)\b/i },
+  { role: 'Ingenjör', pattern: /\b(ingenjör|civilingenjör|konstruktör)\b/i },
 ]
 
 function unique(values: string[]) {
@@ -67,8 +78,13 @@ function localAnalyzeCV(rawText: string): Prisma.InputJsonObject {
   const spokenLanguages = unique([
     /\b(swedish|svenska)\b/i.test(rawText) ? 'Swedish' : '',
     /\b(english|engelska)\b/i.test(rawText) ? 'English' : '',
-    /\barabic\b/i.test(rawText) ? 'Arabic' : '',
-    /\bsomali\b/i.test(rawText) ? 'Somali' : '',
+    /\b(arabic|arabiska)\b/i.test(rawText) ? 'Arabic' : '',
+    /\b(somali|somaliska)\b/i.test(rawText) ? 'Somali' : '',
+    /\b(amharic|amhariska)\b/i.test(rawText) ? 'Amharic' : '',
+    /\b(oromo)\b/i.test(rawText) ? 'Oromo' : '',
+    /\b(spanish|spanska)\b/i.test(rawText) ? 'Spanish' : '',
+    /\b(french|franska)\b/i.test(rawText) ? 'French' : '',
+    /\b(german|tyska)\b/i.test(rawText) ? 'German' : '',
   ].filter(Boolean))
 
   return {

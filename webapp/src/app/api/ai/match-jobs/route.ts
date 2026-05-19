@@ -2,31 +2,9 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { canUseLocalAIFallback, getFriendlyAIError, matchJobToCv } from '@/lib/ai/service'
+import { analyzeAndSaveJobMatch, buildLocalMatch, saveJobMatch } from '@/lib/ai/aiMatchingService'
+import { canUseLocalAIFallback, getFriendlyAIError } from '@/lib/ai/service'
 import { hasReachedAiLimit } from '@/lib/subscription'
-
-function buildLocalMatch(jobTitle: string, jobDescription: string) {
-  const text = jobDescription.toLowerCase()
-  const strengths = [
-    text.includes('team') || text.includes('samarbete') ? 'Rollen verkar värdera samarbete och kommunikation.' : 'Rollen matchar den sökta yrkesinriktningen.',
-    text.includes('junior') || text.includes('trainee') || text.includes('lia') ? 'Annonsen verkar öppen för junior/LIA-profil.' : 'Annonsen kan passa om kraven stämmer med CV:t.',
-  ]
-
-  // Local fallback creates a conservative match instead of blocking the workflow.
-  return {
-    score: text.includes('senior') ? 2.8 : 3.6,
-    tier: text.includes('senior') ? 'medium' : 'medium',
-    strengths,
-    missingSkills: ['Kontrollera annonsens måste-krav manuellt.'],
-    recommendations: [`Anpassa CV:t tydligt mot ${jobTitle} och lyft relevanta exempel.`],
-    recommendation: 'Möjlig match, men granska annonsen innan ansökan.',
-    cvImprovement: 'Lägg till 2-3 konkreta exempel som speglar jobbannonsens viktigaste krav.',
-    coverLetterAngle: 'Fokusera på motivation, lärande och praktisk erfarenhet kopplad till rollen.',
-    aiSummary: 'Extern AI var inte tillgänglig, så detta är en konservativ lokal matchning.',
-    aiReasoning: 'Matchningen bygger på jobbannonsens text och generella signaler, inte full AI-analys.',
-    source: 'local-fallback',
-  }
-}
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth()
@@ -51,42 +29,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const matchText = await matchJobToCv(cv.rawText, job.description, job.title)
-    const matchData = JSON.parse(matchText.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim())
-
-    const jobMatch = await prisma.jobMatch.upsert({
-      where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId } },
-      create: {
-        userId: auth.dbUserId,
-        jobListingId,
-        cvId: cv.id,
-        score: matchData.score,
-        tier: matchData.tier,
-        missingSkills: matchData.missingSkills ?? [],
-        strengths: matchData.strengths ?? [],
-        recommendations: matchData.recommendations ?? [],
-        recommendation: matchData.recommendation,
-        cvImprovement: matchData.cvImprovement,
-        coverLetterAngle: matchData.coverLetterAngle,
-        aiSummary: matchData.aiSummary,
-        aiReasoning: matchData.aiReasoning,
-        rawAnalysis: matchData,
-      },
-      update: {
-        cvId: cv.id,
-        score: matchData.score,
-        tier: matchData.tier,
-        missingSkills: matchData.missingSkills ?? [],
-        strengths: matchData.strengths ?? [],
-        recommendations: matchData.recommendations ?? [],
-        recommendation: matchData.recommendation,
-        cvImprovement: matchData.cvImprovement,
-        coverLetterAngle: matchData.coverLetterAngle,
-        aiSummary: matchData.aiSummary,
-        aiReasoning: matchData.aiReasoning,
-        rawAnalysis: matchData,
-      },
-    })
+    const jobMatch = await analyzeAndSaveJobMatch(auth.dbUserId, cv, job)
 
     if (subscription) {
       await prisma.subscription.update({
@@ -99,39 +42,7 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     if (canUseLocalAIFallback(err)) {
       const matchData = buildLocalMatch(job.title, job.description)
-      const jobMatch = await prisma.jobMatch.upsert({
-        where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId } },
-        create: {
-          userId: auth.dbUserId,
-          jobListingId,
-          cvId: cv.id,
-          score: matchData.score,
-          tier: matchData.tier,
-          missingSkills: matchData.missingSkills,
-          strengths: matchData.strengths,
-          recommendations: matchData.recommendations,
-          recommendation: matchData.recommendation,
-          cvImprovement: matchData.cvImprovement,
-          coverLetterAngle: matchData.coverLetterAngle,
-          aiSummary: matchData.aiSummary,
-          aiReasoning: matchData.aiReasoning,
-          rawAnalysis: matchData,
-        },
-        update: {
-          cvId: cv.id,
-          score: matchData.score,
-          tier: matchData.tier,
-          missingSkills: matchData.missingSkills,
-          strengths: matchData.strengths,
-          recommendations: matchData.recommendations,
-          recommendation: matchData.recommendation,
-          cvImprovement: matchData.cvImprovement,
-          coverLetterAngle: matchData.coverLetterAngle,
-          aiSummary: matchData.aiSummary,
-          aiReasoning: matchData.aiReasoning,
-          rawAnalysis: matchData,
-        },
-      })
+      const jobMatch = await saveJobMatch(auth.dbUserId, cv.id, jobListingId, matchData)
 
       return NextResponse.json({ match: jobMatch, fallback: true })
     }

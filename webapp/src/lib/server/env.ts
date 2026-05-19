@@ -1,9 +1,17 @@
 import fs from 'fs'
 import path from 'path'
 
-export type AIProvider = 'openai' | 'anthropic'
+export type AIProvider = 'openai' | 'anthropic' | 'gpt-sw3'
 
-const AI_ENV_NAMES = new Set(['AI_PROVIDER', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'])
+const AI_ENV_NAMES = new Set([
+  'AI_PROVIDER',
+  'OPENAI_API_KEY',
+  'OPENAI_MODEL',
+  'ANTHROPIC_API_KEY',
+  'HUGGINGFACE_API_TOKEN',
+  'GPT_SW3_MODEL',
+  'GPT_SW3_ENDPOINT',
+])
 
 function parseEnvFile(filePath: string): Record<string, string> {
   if (!fs.existsSync(filePath)) return {}
@@ -48,25 +56,28 @@ export function getSelectedAIProvider(): AIProvider {
     return configured
   }
 
-  return readEnv('ANTHROPIC_API_KEY') ? 'anthropic' : 'openai'
+  return 'openai'
 }
 
 export function getConfiguredAIProvider(): AIProvider | undefined {
   const configured = readEnv('AI_PROVIDER').toLowerCase()
 
-  if (configured === 'openai' || configured === 'anthropic') {
+  if (configured === 'openai' || configured === 'anthropic' || configured === 'gpt-sw3') {
     return configured
   }
 
   if (configured) {
-    throw new Error('AI_PROVIDER must be either "openai" or "anthropic".')
+    throw new Error('AI_PROVIDER must be "openai", "gpt-sw3", or "anthropic".')
   }
 
   return undefined
 }
 
 export function getAIProviderKey(provider: AIProvider): string {
-  const envName = provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'
+  const envName =
+    provider === 'openai' ? 'OPENAI_API_KEY'
+    : provider === 'gpt-sw3' ? 'HUGGINGFACE_API_TOKEN'
+    : 'ANTHROPIC_API_KEY'
   const key = readEnv(envName)
 
   if (!key) {
@@ -74,4 +85,9 @@ export function getAIProviderKey(provider: AIProvider): string {
   }
 
   return key
+}
+
+export function getOptionalEnv(name: string): string | undefined {
+  const value = readEnv(name)
+  return value || undefined
 }

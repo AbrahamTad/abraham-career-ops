@@ -158,6 +158,47 @@ npm run gemini:eval -- "JD text here"
 
 > **Free tier:** Both options work without billing. Native CLI uses Google OAuth; the API script uses `gemini-2.0-flash` (15 RPM, 1M tokens/day free).
 
+## Next.js Swedish Job Search Setup
+
+The `webapp/` app stores CVs, imported Swedish job ads, and match results in Supabase/Postgres through Prisma. OpenAI is the default AI provider; AI Sweden GPT-SW3 can be enabled as an optional Swedish-focused provider through Hugging Face.
+
+```bash
+cd webapp
+cp .env.example .env.local
+npm install
+npm run db:generate
+npm run dev
+```
+
+Example `.env.local` values:
+
+```bash
+DATABASE_URL=postgresql://postgres.xxxxx:password@aws-0-eu-north-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+DIRECT_URL=postgresql://postgres.xxxxx:password@aws-0-eu-north-1.pooler.supabase.com:5432/postgres
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+AI_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+
+# Optional Swedish/Nordic model via Hugging Face
+HUGGINGFACE_API_TOKEN=hf_...
+GPT_SW3_MODEL=AI-Sweden-Models/gpt-sw3-6.7b-v2-instruct
+# AI_PROVIDER=gpt-sw3
+```
+
+Useful API routes:
+
+- `POST /api/cv` uploads or saves CV text and stores a local parsed CV profile.
+- `POST /api/ai/analyze-cv` runs provider-backed CV analysis.
+- `POST /api/jobs/search` fetches JobTech/Platsbanken jobs and saves them.
+- `POST /api/jobs/smart-search` builds CV-driven search terms, imports jobs, and saves match results.
+- `POST /api/ai/match-jobs` matches the active CV to a saved job listing.
+
+If `AI_PROVIDER=gpt-sw3` and GPT-SW3 is unavailable, the app falls back to OpenAI when `OPENAI_API_KEY` is configured.
+
 ## Usage
 
 Career-ops is a single slash command with multiple modes:

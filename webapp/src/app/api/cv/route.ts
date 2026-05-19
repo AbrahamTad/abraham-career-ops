@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { requireAuth, isAuthResponse } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { extractTextFromFile, validateCVText, parseCVProfile } from '@/lib/ai/cv-parser'
+import { extractTextFromFile, validateCVText, parseCVProfile, cvProfileToParsedData } from '@/lib/ai/cv-parser'
 
 export async function GET() {
   const auth = await requireAuth()
@@ -53,6 +54,8 @@ export async function POST(request: NextRequest) {
   if (!validation.valid) return NextResponse.json({ error: validation.error }, { status: 400 })
 
   const profile = parseCVProfile(rawText)
+  // Store a minimal parsedData immediately so smart-search can use it without AI
+  const parsedData = cvProfileToParsedData(profile) as Prisma.InputJsonObject
 
   // Deactivate old CVs
   await prisma.cV.updateMany({
@@ -67,6 +70,7 @@ export async function POST(request: NextRequest) {
       fileSize,
       mimeType,
       rawText,
+      parsedData,
       isActive: true,
     },
   })

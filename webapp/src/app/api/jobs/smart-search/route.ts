@@ -40,28 +40,32 @@ export async function GET(request: NextRequest) {
   })
 }
 
-import { generateJobSearchQueries, getFriendlyAIError, matchJobToCv } from '@/lib/ai/service'
+import { analyzeAndSaveJobMatch } from '@/lib/ai/aiMatchingService'
+import { generateJobSearchQueries, getFriendlyAIError } from '@/lib/ai/service'
 import { searchJobTech, uniqueExternalJobs, type ExternalJob } from '@/lib/jobs/jobtech'
 import { persistExternalJobs } from '@/lib/jobs/persist'
 import { verifyActiveJobIds } from '@/lib/jobs/liveness'
 import { hasReachedAiLimit } from '@/lib/subscription'
 
 const CACHE_MINUTES = 20
-const MAX_IMPORTED_JOBS = 36
-const MAX_AUTO_MATCHES = 8
+const MAX_IMPORTED_JOBS = 60
+const MAX_AUTO_MATCHES = 12
+const MAX_SEARCH_TERMS = 8
 
 type SearchData = {
   titles: string[]
   skills: string[]
   level: string
   summary: string
+  isLIAEligible?: boolean
+  liaTerms?: string[]
 }
 
 function cleanJson(text: string) {
   return text.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim()
 }
 
-function uniqueTerms(terms: string[]) {
+function uniqueTerms(terms: string[], max = MAX_SEARCH_TERMS) {
   const seen = new Set<string>()
   const unique: string[] = []
 
@@ -72,14 +76,14 @@ function uniqueTerms(terms: string[]) {
     unique.push(term)
   }
 
-  return unique.slice(0, 5)
+  return unique.slice(0, max)
 }
 
 function stringsFromJson(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
-function searchDataFromParsedCv(parsedData: Prisma.JsonValue | null) {
+function searchDataFromParsedCv(parsedData: Prisma.JsonValue | null): SearchData | null {
   if (!parsedData || typeof parsedData !== 'object' || Array.isArray(parsedData)) return null
   const data = parsedData as Record<string, unknown>
   const titles = stringsFromJson(data.targetRoles)
@@ -92,6 +96,8 @@ function searchDataFromParsedCv(parsedData: Prisma.JsonValue | null) {
     skills,
     level: typeof data.seniorityLevel === 'string' ? data.seniorityLevel : 'junior',
     summary,
+    isLIAEligible: data.isLIAEligible === true,
+    liaTerms: stringsFromJson(data.liaTerms),
   }
 }
 
@@ -184,9 +190,11 @@ export async function POST(request: NextRequest) {
       const { message } = getFriendlyAIError(err, 'CV analysis failed')
       console.warn('Smart search CV analysis fallback', { message })
       searchData = {
-        titles: query ? [query] : ['Frontend Developer', 'QA Automation', 'LIA'],
+        titles: query ? [query] : ['Frontend Developer', 'Frontendutvecklare', 'QA Testare', 'Webbutvecklare'],
         skills: ['React', 'JavaScript', 'Cypress'],
         level: 'junior',
+        isLIAEligible: false,
+        liaTerms: [],
         summary: 'Local profile graph created from available search inputs.',
       }
     }
@@ -194,9 +202,11 @@ export async function POST(request: NextRequest) {
 
   if (!searchData) {
     searchData = {
-      titles: query ? [query] : ['Frontend Developer', 'QA Automation', 'LIA'],
+      titles: query ? [query] : ['Frontend Developer', 'Frontendutvecklare', 'QA Testare', 'Webbutvecklare'],
       skills: ['React', 'JavaScript', 'Cypress'],
       level: 'junior',
+      isLIAEligible: false,
+      liaTerms: [],
       summary: 'Local profile graph created from available search inputs.',
     }
   }
@@ -204,9 +214,15 @@ export async function POST(request: NextRequest) {
   await updateTask(searchTask.id, { progress: 32, currentStep: 'Building candidate profile graph' })
 
   const titleTerms = Array.isArray(searchData.titles) ? searchData.titles : []
-  const skillTerms = Array.isArray(searchData.skills) ? searchData.skills.slice(0, 4) : []
-  const liaTerms = liaOnly ? ['LIA', 'praktik', 'praktikplats', 'praktikant', 'trainee', 'internship', 'lärling', 'apprentice', 'APL'] : []
-  const searchTerms = uniqueTerms([query, ...titleTerms, ...skillTerms, ...liaTerms])
+  const skillTerms = Array.isArray(searchData.skills) ? searchData.skills.slice(0, 3) : []
+
+  // Auto-include LIA terms when CV shows YH eligibility or liaOnly flag is set
+  const isLIAProfile = liaOnly || searchData.isLIAEligible === true
+  const liaSearchTerms = isLIAProfile
+    ? (searchData.liaTerms?.length ? searchData.liaTerms : ['LIA praktik', 'praktikplats', 'trainee internship'])
+    : []
+
+  const searchTerms = uniqueTerms([query, ...titleTerms, ...skillTerms, ...liaSearchTerms], MAX_SEARCH_TERMS)
 
   let demoMode = false
   let foundJobs: ExternalJob[] = []
@@ -266,42 +282,7 @@ export async function POST(request: NextRequest) {
       if (!jobListing?.description) return
 
       try {
-        const matchText = await matchJobToCv(cv.rawText, jobListing.description, jobListing.title)
-        const matchData = JSON.parse(cleanJson(matchText))
-
-        await prisma.jobMatch.upsert({
-          where: { userId_jobListingId: { userId: auth.dbUserId, jobListingId: jobId } },
-          create: {
-            userId: auth.dbUserId,
-            jobListingId: jobId,
-            cvId: cv.id,
-            score: matchData.score,
-            tier: matchData.tier,
-            missingSkills: matchData.missingSkills ?? [],
-            strengths: matchData.strengths ?? [],
-            recommendations: matchData.recommendations ?? [],
-            recommendation: matchData.recommendation,
-            cvImprovement: matchData.cvImprovement,
-            coverLetterAngle: matchData.coverLetterAngle,
-            aiSummary: matchData.aiSummary,
-            aiReasoning: matchData.aiReasoning,
-            rawAnalysis: matchData,
-          },
-          update: {
-            cvId: cv.id,
-            score: matchData.score,
-            tier: matchData.tier,
-            missingSkills: matchData.missingSkills ?? [],
-            strengths: matchData.strengths ?? [],
-            recommendations: matchData.recommendations ?? [],
-            recommendation: matchData.recommendation,
-            cvImprovement: matchData.cvImprovement,
-            coverLetterAngle: matchData.coverLetterAngle,
-            aiSummary: matchData.aiSummary,
-            aiReasoning: matchData.aiReasoning,
-            rawAnalysis: matchData,
-          },
-        })
+        await analyzeAndSaveJobMatch(auth.dbUserId, cv, jobListing)
 
         matchedCount++
       } catch {
@@ -327,6 +308,8 @@ export async function POST(request: NextRequest) {
     location,
     candidateSummary: searchData.summary,
     source: demoMode ? 'Demo mode' : 'JobTech/Platsbanken',
+    sources: demoMode ? ['demo'] : ['jobtech-platsbanken'],
+    liaMode: isLIAProfile,
     demoMode,
     usedCvCache,
     taskId: searchTask.id,
